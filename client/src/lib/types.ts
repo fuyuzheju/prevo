@@ -22,3 +22,34 @@ export interface ProductItem {
   productType: string;
   createdAt: string;
 }
+
+// --- sales prediction ---
+
+export interface SalesDay {
+  date: string; // YYYY-MM-DD (local)
+  real: number;
+  imported: number;
+  sale: number;
+}
+
+export interface ImportedSaleItem {
+  id: number;
+  date: string;
+  amount: number;
+}
+
+export interface ForecastInfo {
+  windowDays: number;
+  dailyRate: number;
+  method: string;
+}
+
+export interface SalesPrediction {
+  productType: string;
+  series: SalesDay[];
+  importedCount: number;
+  available: number;
+  safetyStock: number;
+  suggestedAmount: number;
+  forecast: ForecastInfo;
+}

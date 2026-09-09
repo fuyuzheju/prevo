@@ -1,5 +1,5 @@
 import { db, type DbClient } from "../db.js";
-import { ApiError } from "../errors.js";
+import { ApiError, isPrismaUniqueViolation } from "../errors.js";
 import { isValidProductName, type Scope } from "../../../shared/model.ts";
 
 export interface ProductInfo {
@@ -7,7 +7,7 @@ export interface ProductInfo {
   createdAt: Date;
 }
 
-type ProductsDb = Pick<DbClient, "product" | "cycleState" | "scopeRecord">;
+type ProductsDb = Pick<DbClient, "product" | "cycleState" | "scopeRecord" | "importedSale">;
 
 function productWhere(scope: Scope) {
   return { userId: scope.userId, productType: scope.productType };
@@ -41,7 +41,7 @@ export async function createProduct(
     });
     return row;
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (isPrismaUniqueViolation(error)) {
       throw new ApiError(409, "PRODUCT_EXISTS", "this product already exists");
     }
     throw error;
@@ -60,7 +60,7 @@ export async function assertProduct(scope: Scope, client: ProductsDb = db): Prom
   }
 }
 
-// Removes the product together with its whole ledger and state history.
+// Removes the product together with its ledger, state history and imports.
 export async function removeProduct(
   userId: number,
   productType: string,
@@ -70,14 +70,6 @@ export async function removeProduct(
   await assertProduct(scope, client);
   await client.scopeRecord.deleteMany({ where: productWhere(scope) });
   await client.cycleState.deleteMany({ where: productWhere(scope) });
+  await client.importedSale.deleteMany({ where: productWhere(scope) });
   await client.product.delete({ where: { userId_productType: productWhere(scope) } });
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "P2002"
-  );
 }

@@ -96,10 +96,11 @@ describe("changePassword and removeUser", () => {
     await expect(login(USERNAME, "newpass456")).resolves.toBeTypeOf("string");
   });
 
-  it("removeUser deletes the account with its products, states and records", async () => {
+  it("removeUser deletes the account with its products, states, records and imports", async () => {
     const userId = await registerAlice();
     const scope = { userId, productType: "widget" };
     await db.product.create({ data: scope });
+    await db.importedSale.create({ data: { ...scope, date: new Date(2026, 7, 1), amount: 9 } });
     await advanceCycle(scope, { sent: 0, received: 0, sale: 10, purchase: 10 });
     await db.scopeRecord.create({ data: { ...scope, kind: "SELL", amount: 5 } });
 
@@ -107,6 +108,7 @@ describe("changePassword and removeUser", () => {
 
     expect(await db.user.count()).toBe(0);
     expect(await db.product.count()).toBe(0);
+    expect(await db.importedSale.count()).toBe(0);
     expect(await db.cycleState.count()).toBe(0);
     expect(await db.scopeRecord.count()).toBe(0);
   });

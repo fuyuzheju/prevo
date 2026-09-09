@@ -1,11 +1,11 @@
 import { cn } from "./ui.tsx";
 
-const tones = [
+const tones: readonly [string, string, string, string] = [
   "from-blue-500 to-sky-400",
   "from-indigo-500 to-blue-400",
   "from-sky-500 to-cyan-400",
   "from-blue-600 to-indigo-500",
-] as const;
+];
 
 export function Avatar({
   name,

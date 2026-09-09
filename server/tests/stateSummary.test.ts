@@ -10,7 +10,7 @@ import {
   listRecords,
 } from "../src/modules/stateSummary.js";
 import { getLatestState, listStates } from "../src/modules/stateMachine.js";
-import { createScope, createUser, scopeFor, truncateAll } from "./helpers.js";
+import { createScope, createUser, mustDefined, scopeFor, truncateAll } from "./helpers.js";
 
 describe("records within a cycle", () => {
   beforeEach(truncateAll);
@@ -20,8 +20,9 @@ describe("records within a cycle", () => {
     expect(await purchase(scope, 100)).toBe(true);
     const records = await db.scopeRecord.findMany({ where: { userId: scope.userId } });
     expect(records).toHaveLength(1);
-    expect(records[0]!.kind).toBe("PURCHASE");
-    expect(records[0]!.amount).toBe(100);
+    const record = mustDefined(records[0], "record");
+    expect(record.kind).toBe("PURCHASE");
+    expect(record.amount).toBe(100);
   });
 
   it("purchase returns false for an invalid amount instead of throwing", async () => {

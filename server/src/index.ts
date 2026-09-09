@@ -16,7 +16,8 @@ const server = app.listen(port, () => {
 
 const settlement = scheduleDailySettlement();
 
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
+const SHUTDOWN_SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
+for (const signal of SHUTDOWN_SIGNALS) {
   process.on(signal, () => {
     settlement.stop();
     server.close(() => {

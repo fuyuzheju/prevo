@@ -1,52 +1,97 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { predictSale } from "../src/modules/predictor.js";
-import { suggestPurchase } from "../src/modules/decision.js";
+import { db } from "../src/db.js";
+import { forecastNext14Days } from "../src/modules/predictor.js";
+import { decidePurchase } from "../src/modules/decision.js";
+import { importSales } from "../src/modules/salesHistory.js";
 import { advanceCycle } from "../src/modules/stateMachine.js";
-import { createScope, truncateAll } from "./helpers.js";
+import { addLocalDays } from "../../shared/date.ts";
+import { createScope, mustDefined, truncateAll } from "./helpers.js";
 
-describe("predictSale (placeholder)", () => {
-  it("predicts 0 without history", () => {
-    expect(predictSale([])).toBe(0);
-  });
-
-  it("averages the sale history", () => {
-    expect(predictSale([10, 20, 30])).toBe(20);
-  });
-
-  it("rounds to whole quantities", () => {
-    expect(predictSale([5, 6])).toBe(6); // 5.5 rounds up
-    expect(predictSale([1, 2])).toBe(2); // 1.5 rounds up
-  });
-});
-
-describe("suggestPurchase (placeholder strategy)", () => {
-  beforeEach(truncateAll);
-
-  it("suggests nothing without any state", async () => {
-    const scope = await createScope();
-    await expect(suggestPurchase(scope)).resolves.toEqual({
-      suggestedAmount: 0,
-      predictedSale: 0,
-      available: 0,
+describe("forecastNext14Days", () => {
+  it("predicts 0 without any data", () => {
+    expect(forecastNext14Days([])).toEqual({
+      windowDays: 0,
+      dailyRate: 0,
+      predictedTotal: 0,
+      method: "trailing-average",
     });
   });
 
-  it("uses available and predicted sale from the history", async () => {
-    const scope = await createScope();
-    // cycle 1: sale 300 bought nothing shipped nothing => available = -300
-    await advanceCycle(scope, { sent: 0, received: 0, sale: 300, purchase: 0 });
-    const suggestion = await suggestPurchase(scope);
-    expect(suggestion.predictedSale).toBe(300);
-    expect(suggestion.available).toBe(-300);
-    expect(suggestion.suggestedAmount).toBe(600);
+  it("uses the trailing 28-day window (including zero-sale days)", () => {
+    const days = Array.from({ length: 40 }, () => ({ total: 10 }));
+    const forecast = forecastNext14Days(days);
+    expect(forecast.windowDays).toBe(28);
+    expect(forecast.dailyRate).toBeCloseTo(10);
+    expect(forecast.predictedTotal).toBe(140);
   });
 
-  it("suggests nothing when available covers the predicted sale", async () => {
+  it("uses the whole (shorter) history when less than 28 days", () => {
+    const days = Array.from({ length: 7 }, (_, i) => ({ total: i === 0 ? 70 : 0 }));
+    const forecast = forecastNext14Days(days);
+    expect(forecast.windowDays).toBe(7);
+    expect(forecast.dailyRate).toBeCloseTo(10);
+    expect(forecast.predictedTotal).toBe(140);
+  });
+
+  it("rounds the predicted total to whole quantities", () => {
+    const days = [
+      { total: 1 },
+      { total: 1 },
+      { total: 1 },
+      { total: 0 }, // rate 0.75 → 10.5 → 11
+    ];
+    expect(forecastNext14Days(days).predictedTotal).toBe(11);
+  });
+});
+
+describe("decidePurchase", () => {
+  beforeEach(truncateAll);
+
+  it("suggests the gap between safety stock and live available", async () => {
     const scope = await createScope();
-    // plenty of stock: inventory 300, transit nets zero => available = 200
-    await advanceCycle(scope, { sent: 0, received: 300, sale: 100, purchase: 300 });
-    const suggestion = await suggestPurchase(scope);
-    expect(suggestion.available).toBe(200);
-    expect(suggestion.suggestedAmount).toBe(0);
+    const today = new Date();
+    const d1 = addLocalDays(today, -1);
+    const d2 = addLocalDays(today, -2);
+    await importSales(scope, [
+      { date: `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, "0")}-${String(d2.getDate()).padStart(2, "0")}`, amount: 20 },
+      { date: `${d1.getFullYear()}-${String(d1.getMonth() + 1).padStart(2, "0")}-${String(d1.getDate()).padStart(2, "0")}`, amount: 20 },
+    ]);
+    // pending real order today: sold 10 → live available = -10
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 10, cycle: null, createdAt: new Date() },
+    });
+
+    const decision = await decidePurchase(scope);
+    // window: 3 days (d-2, d-1, today), total 50 → rate 50/3 → ×14 ≈ 233
+    expect(decision.available).toBe(-10);
+    expect(decision.safetyStock).toBe(233);
+    expect(decision.forecast.windowDays).toBe(3);
+    expect(decision.suggestedAmount).toBe(243); // 233 - (-10)
+    expect(decision.series).toHaveLength(3);
+    expect(mustDefined(decision.series[0], "series day 0").imported).toBe(20);
+    expect(mustDefined(decision.series[2], "series last day").real).toBe(10);
+  });
+
+  it("recommends nothing when available covers the safety stock", async () => {
+    const scope = await createScope();
+    // plenty of stock in a settled snapshot, tiny demand
+    await advanceCycle(scope, { sent: 0, received: 300, sale: 5, purchase: 300 });
+    const decision = await decidePurchase(scope);
+    expect(decision.available).toBeGreaterThanOrEqual(decision.safetyStock);
+    expect(decision.suggestedAmount).toBe(0);
+  });
+
+  it("extrapolates the live position through pending records", async () => {
+    const scope = await createScope();
+    await advanceCycle(scope, { sent: 0, received: 100, sale: 0, purchase: 100 });
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "RECEIVE", amount: 30, cycle: null, createdAt: new Date() },
+    });
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 20, cycle: null, createdAt: new Date() },
+    });
+    const decision = await decidePurchase(scope);
+    // inventory 100 + pending received 30 − sold 20, minus the 30 now out of transit
+    expect(decision.available).toBe(80);
   });
 });

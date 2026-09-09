@@ -1,22 +1,69 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
-import { PackagePlus, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  DatabaseBackup,
+  FileSpreadsheet,
+  PackagePlus,
+  Plus,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { isValidProductName } from "../../../shared/model.ts";
 import * as api from "../lib/api.ts";
+import type { ImportedSaleItem } from "../lib/types.ts";
 import { formatDate } from "../lib/format.ts";
+import { parseSalesSheetFile, type ParsedSalesSheet } from "../lib/excelImport.ts";
 import { useProducts } from "../hooks/useProducts.ts";
 import { ProductSidebar } from "../components/ProductSidebar.tsx";
 import {
   Button,
   Card,
+  CenteredSpinner,
   ConfirmDialog,
   Field,
   InlineMessage,
   Input,
+  cn,
 } from "../components/ui.tsx";
 
 export function ProductsPage() {
   const { products, loading, error, reload } = useProducts();
+  const productNames = useMemo(() => products.map((p) => p.productType), [products]);
+
+  // ---- excel import ----
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [pickedName, setPickedName] = useState<string | null>(null);
+  const [parsed, setParsed] = useState<ParsedSalesSheet | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importOk, setImportOk] = useState<string | null>(null);
+
+  // ---- imported entries management ----
+  const [importedByProduct, setImportedByProduct] = useState<Record<string, ImportedSaleItem[]>>({});
+  const [importedLoading, setImportedLoading] = useState(false);
+  const [importedFilter, setImportedFilter] = useState<string>("");
+
+  const loadImported = useCallback(async (names: string[]) => {
+    setImportedLoading(true);
+    try {
+      const entries = await Promise.all(names.map((name) => api.listImportedSales(name)));
+      const map: Record<string, ImportedSaleItem[]> = {};
+      names.forEach((name, index) => {
+        map[name] = entries[index] ?? [];
+      });
+      setImportedByProduct(map);
+    } catch {
+      setImportedByProduct({});
+    } finally {
+      setImportedLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (products.length > 0) void loadImported(productNames);
+  }, [products, productNames, loadImported]);
+
+  // ---- add product ----
   const [name, setName] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -25,6 +72,60 @@ export function ProductsPage() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const knownSet = useMemo(() => new Set(productNames), [productNames]);
+
+  // classify parsed rows: valid & product exists vs not
+  const unknownNames = useMemo(() => {
+    if (!parsed) return new Set<string>();
+    return new Set(
+      parsed.entries
+        .map((entry) => entry.productType)
+        .filter((name) => !knownSet.has(name)),
+    );
+  }, [parsed, knownSet]);
+
+  const importableCount = parsed ? parsed.entries.filter((e) => knownSet.has(e.productType)).length : 0;
+  const hasBlockers = parsed !== null && (parsed.errors.length > 0 || unknownNames.size > 0);
+
+  async function handleFile(file: File) {
+    setPickedName(file.name);
+    setParsed(null);
+    setImportError(null);
+    setImportOk(null);
+    setParsing(true);
+    try {
+      setParsed(await parseSalesSheetFile(file));
+    } catch {
+      setParsed({ entries: [], errors: ["无法读取该文件，请确认为 .xlsx / .xls / .csv 格式"] });
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  async function handleImport() {
+    if (!parsed || importableCount === 0) return;
+    const rows = parsed.entries.filter((e) => knownSet.has(e.productType));
+    setImporting(true);
+    setImportError(null);
+    setImportOk(null);
+    try {
+      const count = await api.importSalesMany(rows);
+      setImportOk(`已导入 ${count} 条销量记录`);
+      resetPicked();
+      await loadImported(productNames);
+    } catch (err) {
+      setImportError(api.errorMessage(err));
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const resetPicked = () => {
+    setPickedName(null);
+    setParsed(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
@@ -35,7 +136,7 @@ export function ProductsPage() {
       setAddError("商品名称需为 1-40 个字符，且不能包含空白");
       return;
     }
-    if (products.some((p) => p.productType === trimmed)) {
+    if (knownSet.has(trimmed)) {
       setAddError("已有同名商品");
       return;
     }
@@ -66,7 +167,48 @@ export function ProductsPage() {
     }
   }
 
+  async function removeImportedRow(productType: string, id: number) {
+    try {
+      await api.deleteImportedSale(productType, id);
+      await loadImported(productNames);
+    } catch (err) {
+      setImportError(api.errorMessage(err));
+    }
+  }
+
+  async function clearImportedFilter() {
+    const target = importedFilter || productNames[0];
+    if (!target) return;
+    try {
+      await api.clearImportedSales(target);
+      await loadImported(productNames);
+    } catch (err) {
+      setImportError(api.errorMessage(err));
+    }
+  }
+
+  const filterNames = importedFilter
+    ? [importedFilter]
+    : productNames.filter((name) => (importedByProduct[name] ?? []).length > 0);
+  const importedRows = useMemo(() => {
+    const rows: (ImportedSaleItem & { productType: string })[] = [];
+    for (const name of filterNames) {
+      for (const entry of importedByProduct[name] ?? []) {
+        rows.push({ ...entry, productType: name });
+      }
+    }
+    return rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
+  }, [filterNames, importedByProduct]);
+  const importedTotal = Object.values(importedByProduct).reduce((sum, list) => sum + list.length, 0);
+
   const target = products.find((p) => p.productType === pendingDelete) ?? null;
+  const groupCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of parsed?.entries ?? []) {
+      counts.set(entry.productType, (counts.get(entry.productType) ?? 0) + 1);
+    }
+    return counts;
+  }, [parsed]);
 
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
@@ -75,11 +217,112 @@ export function ProductsPage() {
       <div className="min-w-0 flex-1 space-y-6">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900">商品管理</h1>
-          <p className="mt-1 text-sm text-slate-500">管理你的商品种类，之后可在这里补充商品详细信息。</p>
+          <p className="mt-1 text-sm text-slate-500">
+            管理商品种类与历史销量导入，之后可在这里补充商品详细信息。
+          </p>
         </div>
 
         {error && <InlineMessage tone="error">{error}</InlineMessage>}
 
+        {/* import historical sales (multi-product excel) */}
+        <Card>
+          <div className="border-b border-slate-100 px-5 py-4">
+            <h2 className="flex items-center gap-1.5 font-semibold text-slate-900">
+              <DatabaseBackup className="size-4 text-blue-600" />
+              导入历史销量
+              {importedTotal > 0 && (
+                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium tabular-nums text-blue-600">
+                  已导入 {importedTotal} 条
+                </span>
+              )}
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              一张表可包含多种商品：每行 = 商品 | 日期 | 数量（表头名可不同，其余列忽略）。
+              仅用于预测，不影响库存与状态机；真实出售记录会自动计入。表里出现不存在的商品时该行不会导入。
+            </p>
+          </div>
+          <div className="space-y-4 p-5">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-blue-300 bg-blue-50/50 px-4 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50">
+                <FileSpreadsheet className="size-4" />
+                {pickedName ? "重新选择文件" : "选择 Excel 文件"}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void handleFile(file);
+                  }}
+                />
+              </label>
+              <span className="text-xs text-slate-400">支持 .xlsx / .xls / .csv，仅读取第一个工作表</span>
+            </div>
+
+            {parsing && <CenteredSpinner label="解析文件…" />}
+
+            {!parsing && parsed && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-slate-700">
+                    {pickedName}：{parsed.entries.length === 0 ? "没有可导入的行" : `可导入 ${importableCount} 条`}
+                    {unknownNames.size > 0 && (
+                      <span className="text-amber-600">（{unknownNames.size} 个商品不存在）</span>
+                    )}
+                    {parsed.errors.length > 0 && <span className="text-amber-600">（{parsed.errors.length} 行错误）</span>}
+                  </p>
+                  <Button
+                    disabled={importableCount === 0 || hasBlockers}
+                    loading={importing}
+                    onClick={() => void handleImport()}
+                  >
+                    <Upload className="size-4" />
+                    确认导入{importableCount > 0 ? ` ${importableCount} 条` : ""}
+                  </Button>
+                </div>
+
+                {hasBlockers && (
+                  <InlineMessage tone="error">
+                    请先处理下列问题后再导入：不存在的商品请先在下方「新增商品」中创建；
+                    {unknownNames.size > 0 && (
+                      <span className="mt-1 block">商品不存在：{[...unknownNames].join("、")}</span>
+                    )}
+                  </InlineMessage>
+                )}
+                {importError && <InlineMessage tone="error">{importError}</InlineMessage>}
+                {importOk && <InlineMessage tone="success">{importOk}</InlineMessage>}
+
+                {parsed.entries.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {[...groupCounts.entries()].map(([name, count]) => (
+                      <span
+                        key={name}
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-xs font-medium",
+                          knownSet.has(name)
+                            ? "bg-blue-50 text-blue-700"
+                            : "bg-amber-50 text-amber-700",
+                        )}
+                      >
+                        {name} × {count}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {parsed.errors.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                    {parsed.errors.map((err, index) => (
+                      <p key={index}>{err}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* add product */}
         <Card className="p-5 sm:p-6">
           <h2 className="flex items-center gap-2 font-semibold text-slate-900">
             <PackagePlus className="size-4 text-blue-600" />
@@ -105,6 +348,7 @@ export function ProductsPage() {
           </form>
         </Card>
 
+        {/* product list */}
         <Card>
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
             <h2 className="font-semibold text-slate-900">
@@ -131,12 +375,13 @@ export function ProductsPage() {
                       创建于 {formatDate(product.createdAt)}
                     </p>
                   </div>
-                  <Link
-                    to="/records"
+                  <button
+                    type="button"
+                    onClick={() => setImportedFilter(product.productType)}
                     className="text-xs font-medium text-blue-600 hover:underline"
                   >
-                    添加记录
-                  </Link>
+                    历史销量 {importedByProduct[product.productType]?.length ?? 0} 条
+                  </button>
                   <button
                     type="button"
                     onClick={() => setPendingDelete(product.productType)}
@@ -150,6 +395,77 @@ export function ProductsPage() {
             </ul>
           )}
         </Card>
+
+        {/* imported history management */}
+        {importedTotal > 0 && (
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4">
+              <h2 className="font-semibold text-slate-900">已导入历史销量</h2>
+              <div className="flex items-center gap-2">
+                <select
+                  value={importedFilter}
+                  onChange={(e) => setImportedFilter(e.target.value)}
+                  className="rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="">全部商品</option>
+                  {products.map((p) => (
+                    <option key={p.productType} value={p.productType}>
+                      {p.productType}
+                    </option>
+                  ))}
+                </select>
+                {importedFilter && (
+                  <button
+                    type="button"
+                    onClick={() => void clearImportedFilter()}
+                    className="inline-flex items-center gap-1 text-xs text-rose-600 hover:underline"
+                  >
+                    <Trash2 className="size-3" /> 清空该商品
+                  </button>
+                )}
+              </div>
+            </div>
+            {importedLoading ? (
+              <CenteredSpinner label="加载中…" />
+            ) : importedRows.length === 0 ? (
+              <p className="px-5 py-8 text-center text-sm text-slate-400">该筛选下没有导入记录</p>
+            ) : (
+              <div className="max-h-96 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-white">
+                    <tr className="text-xs text-slate-400">
+                      <th className="px-5 py-2.5 text-left font-medium">商品</th>
+                      <th className="px-4 py-2.5 text-left font-medium">日期</th>
+                      <th className="px-4 py-2.5 text-right font-medium">数量</th>
+                      <th className="px-5 py-2.5 text-right font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importedRows.map((entry) => (
+                      <tr key={`${entry.productType}-${entry.id}`} className="border-t border-slate-100 text-slate-600 hover:bg-slate-50">
+                        <td className="px-5 py-2.5 font-medium text-slate-800">{entry.productType}</td>
+                        <td className="px-4 py-2.5 tabular-nums">{formatDate(entry.date)}</td>
+                        <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-slate-800">
+                          {entry.amount}
+                        </td>
+                        <td className="px-5 py-2.5 text-right">
+                          <button
+                            type="button"
+                            onClick={() => void removeImportedRow(entry.productType, entry.id)}
+                            aria-label="删除该条导入"
+                            className="rounded-lg p-1 text-slate-300 hover:bg-rose-50 hover:text-rose-600"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        )}
       </div>
 
       {pendingDelete && target && (
@@ -164,10 +480,8 @@ export function ProductsPage() {
           }}
           onConfirm={() => void handleDelete()}
         >
-          会一并删除该商品的全部周期状态与记录流水，且不可恢复。
-          {deleteError && (
-            <span className="mt-2 block text-rose-600">{deleteError}</span>
-          )}
+          会一并删除该商品的全部周期状态、记录流水与导入历史，且不可恢复。
+          {deleteError && <span className="mt-2 block text-rose-600">{deleteError}</span>}
         </ConfirmDialog>
       )}
     </div>

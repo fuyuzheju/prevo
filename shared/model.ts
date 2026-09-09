@@ -29,11 +29,16 @@ export interface CycleInput {
   purchase: number;
 }
 
-export const RECORD_KINDS = ["PURCHASE", "SELL", "SEND", "RECEIVE"] as const;
+export const RECORD_KINDS: readonly ["PURCHASE", "SELL", "SEND", "RECEIVE"] = [
+  "PURCHASE",
+  "SELL",
+  "SEND",
+  "RECEIVE",
+];
 export type RecordKind = (typeof RECORD_KINDS)[number];
 
 export function isRecordKind(value: string): value is RecordKind {
-  return (RECORD_KINDS as readonly string[]).includes(value);
+  return RECORD_KINDS.some((kind) => kind === value);
 }
 
 export function isQuantity(value: unknown): value is number {
@@ -47,4 +52,49 @@ export function isValidProductName(value: unknown): value is string {
     value.length <= 40 &&
     !/\s/.test(value)
   );
+}
+
+// ---- live position math (docs/state.md), shared by server decisions and
+// the client's live views ----
+
+export interface TransitPosition {
+  inventory: number;
+  soldTransit: number;
+  boughtTransit: number;
+}
+
+// Extrapolate a settled snapshot through pending (unsettled) records:
+//   receive moves goods into inventory and settles part of the transit;
+//   send ships goods out of inventory and settles part of soldTransit;
+//   purchase adds to boughtTransit, sell adds to soldTransit.
+export function applyPendingToPosition(
+  base: TransitPosition,
+  pendingByKind: Record<RecordKind, number>,
+): TransitPosition {
+  let { inventory, soldTransit, boughtTransit } = base;
+  for (const kind of RECORD_KINDS) {
+    const amount = pendingByKind[kind];
+    if (amount === 0) continue;
+    switch (kind) {
+      case "RECEIVE":
+        inventory += amount;
+        boughtTransit -= amount;
+        break;
+      case "SEND":
+        inventory -= amount;
+        soldTransit -= amount;
+        break;
+      case "PURCHASE":
+        boughtTransit += amount;
+        break;
+      case "SELL":
+        soldTransit += amount;
+        break;
+    }
+  }
+  return { inventory, soldTransit, boughtTransit };
+}
+
+export function availableOf(position: TransitPosition): number {
+  return position.inventory + position.boughtTransit - position.soldTransit;
 }

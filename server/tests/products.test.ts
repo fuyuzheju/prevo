@@ -8,7 +8,7 @@ import {
   removeProduct,
 } from "../src/modules/products.js";
 import { advanceCycle } from "../src/modules/stateMachine.js";
-import { createUser, scopeFor, truncateAll } from "./helpers.js";
+import { createUser, mustDefined, scopeFor, truncateAll } from "./helpers.js";
 
 async function createUserWithProduct(productType = "widget"): Promise<number> {
   const userId = await createUser();
@@ -24,8 +24,8 @@ describe("products", () => {
     await createProduct(userId, "shirt");
     const items = await listProducts(userId);
     expect(items.map((p) => p.productType)).toEqual(["tee", "shirt"]);
-    expect(items[0]).toMatchObject({ productType: "tee" });
-    expect(items[0]!.createdAt).toBeInstanceOf(Date);
+    expect(mustDefined(items[0], "first product")).toMatchObject({ productType: "tee" });
+    expect(mustDefined(items[0], "first product").createdAt).toBeInstanceOf(Date);
   });
 
   it("isolates products between users", async () => {
@@ -63,15 +63,17 @@ describe("products", () => {
     });
   });
 
-  it("removeProduct cleans its ledger and states", async () => {
+  it("removeProduct cleans its ledger, states and imports", async () => {
     const userId = await createUserWithProduct();
     const scope = scopeFor(userId, "widget");
     await db.scopeRecord.create({ data: { ...scope, kind: "SELL", amount: 5 } });
+    await db.importedSale.create({ data: { ...scope, date: new Date(2026, 7, 1), amount: 9 } });
     await advanceCycle(scope, { sent: 0, received: 0, sale: 10, purchase: 10 });
 
     await removeProduct(userId, "widget");
 
     expect(await db.product.count()).toBe(0);
+    expect(await db.importedSale.count()).toBe(0);
     expect(await db.scopeRecord.count()).toBe(0);
     expect(await db.cycleState.count()).toBe(0);
   });

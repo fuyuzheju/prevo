@@ -6,6 +6,7 @@ let userCounter = 0;
 export async function truncateAll(): Promise<void> {
   await db.scopeRecord.deleteMany();
   await db.cycleState.deleteMany();
+  await db.importedSale.deleteMany();
   await db.product.deleteMany();
   await db.user.deleteMany();
 }
@@ -15,6 +16,15 @@ export async function createUser(
 ): Promise<number> {
   const user = await db.user.create({ data: { username, passwordHash: "unused" } });
   return user.id;
+}
+
+// Tests often read index positions that the DB contract guarantees to exist;
+// this fails loudly instead of using a non-null assertion.
+export function mustDefined<T>(value: T | null | undefined, what = "value"): T {
+  if (value === null || value === undefined) {
+    throw new Error(`expected ${what} to be defined`);
+  }
+  return value;
 }
 
 export function scopeFor(userId: number, productType = "widget"): Scope {

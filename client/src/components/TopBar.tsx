@@ -1,5 +1,5 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
-import { ClipboardPlus, Database, Package, Settings } from "lucide-react";
+import { ClipboardPlus, Database, Package, Settings, TrendingUp } from "lucide-react";
 import { useAuth } from "../auth/AuthContext.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { cn } from "./ui.tsx";
@@ -7,6 +7,7 @@ import { cn } from "./ui.tsx";
 const navItems = [
   { to: "/", label: "查询数据", icon: Database, end: true },
   { to: "/records", label: "添加记录", icon: ClipboardPlus, end: false },
+  { to: "/predict", label: "销量预测", icon: TrendingUp, end: false },
   { to: "/products", label: "商品管理", icon: Package, end: false },
 ];
 

@@ -7,11 +7,22 @@ import { Button, Card, Field, Input, InlineMessage, cn } from "../components/ui.
 
 type Mode = "login" | "register";
 
+const MODES: readonly Mode[] = ["login", "register"];
+
+// react-router navigation state is opaque; read the optional "from" path
+function redirectTarget(state: unknown): string {
+  if (typeof state === "object" && state !== null && "from" in state) {
+    const from = state.from;
+    if (typeof from === "string") return from;
+  }
+  return "/";
+}
+
 export function LoginPage() {
   const { user, initializing, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from ?? "/";
+  const from = redirectTarget(location.state);
 
   const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
@@ -96,7 +107,7 @@ export function LoginPage() {
 
           <Card className="p-6 sm:p-8">
             <div className="mb-6 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
-              {(["login", "register"] as const).map((m) => (
+              {MODES.map((m) => (
                 <button
                   key={m}
                   type="button"

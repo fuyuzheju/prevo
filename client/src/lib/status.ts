@@ -1,4 +1,5 @@
 import type { RecordEntry, RecordKind, StateSnapshot } from "./types.ts";
+import { applyPendingToPosition, availableOf } from "../../../shared/model.ts";
 
 export interface LiveStatus {
   inventory: number;
@@ -18,44 +19,20 @@ export function pendingOf(records: readonly RecordEntry[]): RecordEntry[] {
 }
 
 // Live position of a scope: the latest settled snapshot extrapolated through
-// the pending (unsettled) records, mirroring the state machine formulas:
-//   receive/send move inventory; purchase adds to transit, receive settles it;
-//   sell adds to soldTransit, send settles it.
+// the pending (unsettled) records, mirroring the state machine formulas.
 export function computeLiveStatus(
   snapshot: StateSnapshot | null,
   records: readonly RecordEntry[],
 ): LiveStatus {
   const pending = pendingOf(records);
-  let inventory = snapshot?.inventory ?? 0;
-  let soldTransit = snapshot?.soldTransit ?? 0;
-  let boughtTransit = snapshot?.boughtTransit ?? 0;
-
-  for (const record of pending) {
-    switch (record.kind) {
-      case "RECEIVE":
-        inventory += record.amount;
-        boughtTransit -= record.amount;
-        break;
-      case "SEND":
-        inventory -= record.amount;
-        soldTransit -= record.amount;
-        break;
-      case "PURCHASE":
-        boughtTransit += record.amount;
-        break;
-      case "SELL":
-        soldTransit += record.amount;
-        break;
-    }
-  }
-
-  return {
-    inventory,
-    soldTransit,
-    boughtTransit,
-    available: inventory + boughtTransit - soldTransit,
-    pendingCount: pending.length,
+  const byKind = sumPendingByKind(records).byKind;
+  const base = {
+    inventory: snapshot?.inventory ?? 0,
+    soldTransit: snapshot?.soldTransit ?? 0,
+    boughtTransit: snapshot?.boughtTransit ?? 0,
   };
+  const position = applyPendingToPosition(base, byKind);
+  return { ...position, available: availableOf(position), pendingCount: pending.length };
 }
 
 export function sumPendingByKind(records: readonly RecordEntry[]): PendingTotals {

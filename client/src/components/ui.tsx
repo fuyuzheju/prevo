@@ -5,7 +5,9 @@ export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
 
-const buttonVariants = {
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+
+const buttonVariants: Record<ButtonVariant, string> = {
   primary:
     "bg-blue-600 text-white hover:bg-blue-700 focus-visible:outline-blue-600 shadow-sm disabled:bg-blue-300",
   secondary:
@@ -13,10 +15,10 @@ const buttonVariants = {
   ghost: "text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:text-slate-300",
   danger:
     "bg-rose-600 text-white hover:bg-rose-700 focus-visible:outline-rose-600 shadow-sm disabled:bg-rose-300",
-} as const;
+};
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: keyof typeof buttonVariants;
+  variant?: ButtonVariant;
   loading?: boolean;
 }
 
@@ -95,20 +97,23 @@ export function CenteredSpinner({ label }: { label?: string }) {
   );
 }
 
+type MessageTone = "error" | "success" | "info";
+
+const messageStyles: Record<MessageTone, string> = {
+  error: "border-rose-200 bg-rose-50 text-rose-700",
+  success: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  info: "border-blue-200 bg-blue-50 text-blue-700",
+};
+
 export function InlineMessage({
   tone,
   children,
 }: {
-  tone: "error" | "success" | "info";
+  tone: MessageTone;
   children: ReactNode;
 }) {
-  const styles = {
-    error: "border-rose-200 bg-rose-50 text-rose-700",
-    success: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    info: "border-blue-200 bg-blue-50 text-blue-700",
-  } as const;
   return (
-    <div className={cn("rounded-xl border px-3 py-2.5 text-sm", styles[tone])}>{children}</div>
+    <div className={cn("rounded-xl border px-3 py-2.5 text-sm", messageStyles[tone])}>{children}</div>
   );
 }
 

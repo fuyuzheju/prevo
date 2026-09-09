@@ -1,26 +1,66 @@
 import { db, type DbClient } from "../db.js";
-import { computeAvailable, listStates } from "./stateMachine.js";
-import { predictSale } from "./predictor.js";
-import type { Scope } from "../../../shared/model.ts";
+import { getLatestState } from "./stateMachine.js";
+import { forecastNext14Days, type TwoWeekForecast } from "./predictor.js";
+import { buildDailySalesSeries, type SalesDay } from "./salesHistory.js";
+import {
+  applyPendingToPosition,
+  availableOf,
+  isRecordKind,
+  type RecordKind,
+  type Scope,
+} from "../../../shared/model.ts";
 
-export interface PurchaseSuggestion {
-  suggestedAmount: number;
-  predictedSale: number;
+// Purchase decision (docs/decision.md): buy so that the live available
+// position covers the safety stock, where the safety stock is the predicted
+// total sales of the next two weeks.
+
+export interface PurchaseDecision {
   available: number;
+  safetyStock: number;
+  suggestedAmount: number;
+  forecast: TwoWeekForecast;
 }
 
-// Purchase strategy placeholder (docs/decision.md does not exist yet). The
-// real strategy in state.md is: buy so that available covers the predicted
-// sale. This is only a naive first cut — TODO(decision): replace with the
-// real purchase strategy described in decision.md.
-export async function suggestPurchase(
+type PositionDb = Pick<DbClient, "cycleState" | "scopeRecord">;
+
+function emptyPendingByKind(): Record<RecordKind, number> {
+  return { PURCHASE: 0, SELL: 0, SEND: 0, RECEIVE: 0 };
+}
+
+// Live position = latest settled snapshot extrapolated through the pending
+// records (same math the client shows on the query page).
+export async function getLivePosition(
+  scope: Scope,
+  client: PositionDb = db,
+): Promise<{ inventory: number; soldTransit: number; boughtTransit: number; available: number }> {
+  const [snapshot, records] = await Promise.all([
+    getLatestState(scope, client),
+    client.scopeRecord.findMany({
+      where: { userId: scope.userId, productType: scope.productType, cycle: null },
+      select: { kind: true, amount: true },
+    }),
+  ]);
+  const base = snapshot
+    ? { inventory: snapshot.inventory, soldTransit: snapshot.soldTransit, boughtTransit: snapshot.boughtTransit }
+    : { inventory: 0, soldTransit: 0, boughtTransit: 0 };
+  const byKind = emptyPendingByKind();
+  for (const row of records) {
+    if (isRecordKind(row.kind)) byKind[row.kind] += row.amount;
+  }
+  const position = applyPendingToPosition(base, byKind);
+  return { ...position, available: availableOf(position) };
+}
+
+export async function decidePurchase(
   scope: Scope,
   client: DbClient = db,
-): Promise<PurchaseSuggestion> {
-  const history = await listStates(scope, client);
-  const latest = history[history.length - 1];
-  const available = latest ? computeAvailable(latest) : 0;
-  const predictedSale = predictSale(history.map((s) => s.sale));
-  const suggestedAmount = Math.max(0, predictedSale - available);
-  return { suggestedAmount, predictedSale, available };
+): Promise<PurchaseDecision & { series: SalesDay[] }> {
+  const [series, position] = await Promise.all([
+    buildDailySalesSeries(scope, client),
+    getLivePosition(scope, client),
+  ]);
+  const forecast = forecastNext14Days(series.map((day) => ({ total: day.sale })));
+  const safetyStock = forecast.predictedTotal;
+  const suggestedAmount = Math.max(0, safetyStock - position.available);
+  return { available: position.available, safetyStock, suggestedAmount, forecast, series };
 }

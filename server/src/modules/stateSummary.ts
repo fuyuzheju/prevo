@@ -9,6 +9,7 @@ import {
   type Scope,
   type StateSnapshot,
 } from "../../../shared/model.ts";
+import { addLocalDays } from "../../../shared/date.ts";
 import type { Prisma } from "../../generated/prisma/client.js";
 
 // Records land on the current (pending) cycle of the scope. summarize() folds
@@ -133,9 +134,6 @@ export async function listRecords(
 // never this folding logic or the data model.
 // ---------------------------------------------------------------------------
 
-function addLocalDays(date: Date, days: number): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-}
 
 // Fold every pending record of the scope with createdAt < cutoff into one new
 // cycle. Idempotent: settled records carry a cycle and are never folded again.
@@ -199,10 +197,11 @@ export function settlePendingByDay(
       select: { createdAt: true },
     });
     if (rows.length === 0) return 0;
-    const earliest = rows.reduce(
-      (min, row) => (row.createdAt < min ? row.createdAt : min),
-      rows[0]!.createdAt,
-    );
+    let earliest: Date | undefined;
+    for (const row of rows) {
+      if (earliest === undefined || row.createdAt < earliest) earliest = row.createdAt;
+    }
+    if (earliest === undefined) return 0;
     const todayStart = addLocalDays(new Date(), 0); // today's local midnight
     let created = 0;
     for (

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Link, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext.tsx";
 import { TopBar } from "./components/TopBar.tsx";
@@ -8,6 +9,11 @@ import { RecordsPage } from "./pages/RecordsPage.tsx";
 import { ProductsPage } from "./pages/ProductsPage.tsx";
 import { ProfilePage } from "./pages/ProfilePage.tsx";
 import { SettingsPage } from "./pages/SettingsPage.tsx";
+
+// echarts is heavy; the predict page is loaded on demand
+const PredictPage = lazy(() =>
+  import("./pages/PredictPage.tsx").then((module) => ({ default: module.PredictPage })),
+);
 
 function FullScreenSpinner() {
   return (
@@ -42,6 +48,20 @@ export function App() {
       <Route element={<RequireAuth />}>
         <Route path="/" element={<QueryPage />} />
         <Route path="/records" element={<RecordsPage />} />
+        <Route
+          path="/predict"
+          element={
+            <Suspense
+              fallback={
+                <div className="flex justify-center py-16">
+                  <CenteredSpinner label="加载预测页…" />
+                </div>
+              }
+            >
+              <PredictPage />
+            </Suspense>
+          }
+        />
         <Route path="/products" element={<ProductsPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/settings" element={<SettingsPage />} />

@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { db, type DbClient } from "../db.js";
-import { ApiError } from "../errors.js";
+import { ApiError, isPrismaUniqueViolation } from "../errors.js";
 
 export interface AuthUser {
   id: number;
@@ -58,7 +58,7 @@ export async function register(
     const user = await client.user.create({ data: { username, passwordHash } });
     return toAuthUser(user);
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (isPrismaUniqueViolation(error)) {
       throw new ApiError(409, "USERNAME_TAKEN", "username is already taken");
     }
     throw error;
@@ -83,13 +83,17 @@ export function signToken(userId: number, username: string): string {
 // auth & identify: verify a token and return the user it belongs to. Throws
 // when the token is invalid or the user no longer exists.
 export async function identify(token: string): Promise<AuthUser> {
-  let payload: jwt.JwtPayload;
+  let subject: unknown;
   try {
-    payload = jwt.verify(token, jwtSecret()) as jwt.JwtPayload;
+    const decoded = jwt.verify(token, jwtSecret());
+    if (typeof decoded === "string") {
+      throw new ApiError(401, "INVALID_TOKEN", "token is invalid or expired");
+    }
+    subject = decoded.sub;
   } catch {
     throw new ApiError(401, "INVALID_TOKEN", "token is invalid or expired");
   }
-  const userId = Number(payload.sub);
+  const userId = Number(subject);
   if (!Number.isSafeInteger(userId)) {
     throw new ApiError(401, "INVALID_TOKEN", "token has no valid subject");
   }
@@ -114,20 +118,12 @@ export async function changePassword(
   await db.user.update({ where: { id: userId }, data: { passwordHash } });
 }
 
-// remove user together with their products, states and records (SQLite does
-// not enforce the schema-level cascade without foreign_keys pragma).
+// remove user together with their products, states, records and imports
+// (SQLite does not enforce the schema-level cascade without foreign_keys pragma).
 export async function removeUser(userId: number): Promise<void> {
   await db.scopeRecord.deleteMany({ where: { userId } });
   await db.cycleState.deleteMany({ where: { userId } });
+  await db.importedSale.deleteMany({ where: { userId } });
   await db.product.deleteMany({ where: { userId } });
   await db.user.delete({ where: { id: userId } });
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "P2002"
-  );
 }

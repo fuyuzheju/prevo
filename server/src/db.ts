@@ -7,9 +7,9 @@ import { PrismaClient } from "../generated/prisma/client.js";
 // project root (where prisma.config.ts lives), matching the CLI: the app and
 // migrations must share one database file.
 function resolveSqliteUrl(url: string): string {
-  const match = /^file:(.+)$/.exec(url);
-  if (!match) return url; // e.g. ":memory:" or a non-sqlite scheme
-  const rest = match[1]!;
+  const PREFIX = "file:";
+  if (!url.startsWith(PREFIX)) return url; // e.g. ":memory:" or a non-sqlite scheme
+  const rest = url.slice(PREFIX.length);
   if (path.isAbsolute(rest)) return rest;
   const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   return path.resolve(projectDir, rest);

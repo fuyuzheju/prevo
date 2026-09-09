@@ -12,13 +12,28 @@ datasource db {
 }
 
 model User {
-  id           Int           @id @default(autoincrement())
-  username     String        @unique
-  passwordHash String
-  createdAt    DateTime      @default(now())
-  cycleStates  CycleState[]
-  scopeRecords ScopeRecord[]
-  products     Product[]
+  id            Int           @id @default(autoincrement())
+  username      String        @unique
+  passwordHash  String
+  createdAt     DateTime      @default(now())
+  cycleStates   CycleState[]
+  scopeRecords  ScopeRecord[]
+  importedSales ImportedSale[]
+  products      Product[]
+}
+
+// Imported historical sales: only used for sales prediction. They never
+// touch the state machine, the ledger or the live position.
+model ImportedSale {
+  id          Int      @id @default(autoincrement())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      Int
+  productType String
+  date        DateTime // local midnight, only the date part matters
+  amount      Int      // total sales of that day
+  createdAt   DateTime @default(now())
+
+  @@index([userId, productType])
 }
 
 // One product type (scope dimension) per user. Detailed product fields will

@@ -1,5 +1,4 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
-import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createApp } from "../src/app.js";
 import { truncateAll } from "./helpers.js";
@@ -10,7 +9,11 @@ let base: string;
 beforeAll(async () => {
   server = createApp().listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("test server is not listening on a tcp port");
+  }
+  base = `http://127.0.0.1:${address.port}`;
 });
 
 afterAll(async () => {
@@ -57,7 +60,7 @@ async function loginWithProduct(username: string, productType = "widget"): Promi
   return token;
 }
 
-const stateFields = [
+const stateFields: readonly [
   "cycle",
   "inventory",
   "soldTransit",
@@ -66,7 +69,7 @@ const stateFields = [
   "received",
   "sale",
   "purchase",
-] as const;
+] = ["cycle", "inventory", "soldTransit", "boughtTransit", "sent", "received", "sale", "purchase"];
 
 function expectState(state: any, expected: Record<(typeof stateFields)[number], number>) {
   for (const key of stateFields) {
@@ -304,5 +307,117 @@ describe("product cycle flow over HTTP", () => {
     });
     expect(res.status).toBe(400);
     expect(res.json.error.code).toBe("INVALID_PRODUCT_TYPE");
+  });
+});
+
+describe("sales import and prediction over HTTP", () => {
+  function localKey(daysAgoN: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgoN);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  it("imports, lists, deletes and clears sales history", async () => {
+    const token = await loginWithProduct("alice", "widget");
+
+    const imported = await call("POST", "/api/products/widget/sales/import", {
+      token,
+      body: { entries: [{ date: localKey(2), amount: 30 }, { date: localKey(1), amount: 20 }] },
+    });
+    expect(imported.status).toBe(201);
+    expect(imported.json.imported).toBe(2);
+
+    const bad = await call("POST", "/api/products/widget/sales/import", {
+      token,
+      body: { entries: [{ date: "2026-02-30", amount: 5 }] },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.json.error.code).toBe("INVALID_DATE");
+
+    const list = await call("GET", "/api/products/widget/sales/import", { token });
+    expect(list.status).toBe(200);
+    expect(list.json.entries).toHaveLength(2);
+
+    const removed = await call("DELETE", `/api/products/widget/sales/import/${list.json.entries[0].id}`, {
+      token,
+    });
+    expect(removed.status).toBe(204);
+    const after = await call("GET", "/api/products/widget/sales/import", { token });
+    expect(after.json.entries).toHaveLength(1);
+
+    const cleared = await call("DELETE", "/api/products/widget/sales/import", { token });
+    expect(cleared.status).toBe(204);
+    const empty = await call("GET", "/api/products/widget/sales/import", { token });
+    expect(empty.json.entries).toEqual([]);
+  });
+
+  it("predict includes series, live available and the decision fields", async () => {
+    const token = await loginWithProduct("alice", "widget");
+    await call("POST", "/api/products/widget/sales/import", {
+      token,
+      body: { entries: [{ date: localKey(1), amount: 20 }] },
+    });
+    await call("POST", "/api/products/widget/sell", { token, body: { amount: 10 } });
+
+    const predict = await call("GET", "/api/products/widget/predict", { token });
+    expect(predict.status).toBe(200);
+    expect(predict.json.productType).toBe("widget");
+    expect(predict.json.importedCount).toBe(1);
+    expect(typeof predict.json.available).toBe("number");
+    expect(typeof predict.json.safetyStock).toBe("number");
+    expect(typeof predict.json.suggestedAmount).toBe("number");
+    expect(predict.json.forecast.method).toBe("trailing-average");
+    expect(predict.json.available).toBe(-10); // pending sell 10, nothing else
+    expect(predict.json.safetyStock).toBeGreaterThan(0);
+    expect(predict.json.suggestedAmount).toBe(predict.json.safetyStock + 10);
+    const series: { date: string; real: number; imported: number; sale: number }[] =
+      predict.json.series;
+    expect(series).toHaveLength(2); // yesterday + today, contiguous
+    expect(series[0]).toMatchObject({ date: localKey(1), imported: 20, sale: 20 });
+    expect(series[1]).toMatchObject({ date: localKey(0), real: 10, sale: 10 });
+  });
+
+  it("guards prediction and import routes with the product check", async () => {
+    const token = await loginWithProduct("alice", "widget");
+    const guardCases: readonly (readonly ["GET" | "POST", string, unknown])[] = [
+      ["GET", "/api/products/ghost/predict", undefined],
+      ["POST", "/api/products/ghost/sales/import", { entries: [{ date: localKey(1), amount: 5 }] }],
+    ];
+    for (const [method, path, body] of guardCases) {
+      const res = await call(method, path, { token, body });
+      expect(res.status).toBe(404);
+      expect(res.json.error.code).toBe("PRODUCT_NOT_FOUND");
+    }
+  });
+
+  it("imports multi-product sales history in one batch", async () => {
+    const token = await loginWithProduct("alice", "widget");
+    const created = await call("POST", "/api/products", { token, body: { productType: "gadget" } });
+    expect(created.status).toBe(201);
+
+    const ok = await call("POST", "/api/sales/import", {
+      token,
+      body: {
+        entries: [
+          { productType: "widget", date: localKey(1), amount: 30 },
+          { productType: "gadget", date: localKey(2), amount: 12 },
+        ],
+      },
+    });
+    expect(ok.status).toBe(201);
+    expect(ok.json.imported).toBe(2);
+
+    const missing = await call("POST", "/api/sales/import", {
+      token,
+      body: { entries: [{ productType: "ghost", date: localKey(1), amount: 5 }] },
+    });
+    expect(missing.status).toBe(400);
+    expect(missing.json.error.code).toBe("PRODUCT_NOT_FOUND");
+    expect(missing.json.error.message).toContain("ghost");
+
+    const unauthorized = await call("POST", "/api/sales/import", {
+      body: { entries: [{ productType: "widget", date: localKey(1), amount: 5 }] },
+    });
+    expect(unauthorized.status).toBe(401);
   });
 });

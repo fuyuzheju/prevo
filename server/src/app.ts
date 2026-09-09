@@ -1,6 +1,6 @@
 import express, { type ErrorRequestHandler } from "express";
-import { ApiError } from "./errors.js";
-import { authRouter, productsRouter } from "./modules/webApi.js";
+import { ApiError, isPrismaUniqueViolation } from "./errors.js";
+import { authRouter, productsRouter, salesRouter } from "./modules/webApi.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -12,6 +12,7 @@ export function createApp(): express.Express {
 
   app.use("/api/auth", authRouter);
   app.use("/api/products", productsRouter);
+  app.use("/api/sales", salesRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ error: { code: "NOT_FOUND", message: "no such endpoint" } });
@@ -32,13 +33,4 @@ export function createApp(): express.Express {
   app.use(errorHandler);
 
   return app;
-}
-
-function isPrismaUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "P2002"
-  );
 }

@@ -8,7 +8,7 @@ import {
   nextCycleState,
 } from "../src/modules/stateMachine.js";
 import { ApiError } from "../src/errors.js";
-import { createScope, createUser, scopeFor, truncateAll } from "./helpers.js";
+import { createScope, createUser, mustDefined, scopeFor, truncateAll } from "./helpers.js";
 
 // Pure transition, per docs/state.md:
 //   inventory = inventory[-1] + received - sent
@@ -87,7 +87,7 @@ describe("persisted state machine", () => {
     expect((await getLatestState(scope))?.cycle).toBe(2);
     const all = await listStates(scope);
     expect(all.map((s) => s.cycle)).toEqual([1, 2]);
-    expect(all[1]!.inventory).toBe(40);
+    expect(mustDefined(all[1], "second state").inventory).toBe(40);
   });
 
   it("reads a snapshot by cycle number", async () => {
