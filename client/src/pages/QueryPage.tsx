@@ -18,7 +18,8 @@ import { Card, CenteredSpinner, InlineMessage, cn } from "../components/ui.tsx";
 import { formatDateTime } from "../lib/format.ts";
 
 interface ProductResult {
-  productType: string;
+  productId: number;
+  name: string;
   latest: StateSnapshot | null;
   records: RecordEntry[];
   error: string | null;
@@ -27,78 +28,81 @@ interface ProductResult {
 
 export function QueryPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
-  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
-  const [results, setResults] = useState<Record<string, ProductResult>>({});
+  const [checked, setChecked] = useState<ReadonlySet<number>>(new Set());
+  const [results, setResults] = useState<Record<number, ProductResult>>({});
 
-  const toggle = useCallback((productType: string, next: boolean) => {
+  const toggle = useCallback((productId: number, next: boolean) => {
     setChecked((prev) => {
       const copy = new Set(prev);
-      if (next) copy.add(productType);
-      else copy.delete(productType);
+      if (next) copy.add(productId);
+      else copy.delete(productId);
       return copy;
     });
   }, []);
 
   const toggleAll = useCallback(
     (next: boolean) => {
-      setChecked(next ? new Set(products.map((p) => p.productType)) : new Set());
+      setChecked(next ? new Set(products.map((p) => p.id)) : new Set());
     },
     [products],
   );
 
-  const selectedTypes = useMemo(
-    () => products.map((p) => p.productType).filter((name) => checked.has(name)),
+  const selectedIds = useMemo(
+    () => products.map((p) => p.id).filter((id) => checked.has(id)),
     [products, checked],
   );
 
-  const loadProduct = useCallback(async (productType: string) => {
+  const loadProduct = useCallback(async (productId: number) => {
     // always seed a complete placeholder first so renders never see a
     // half-built entry (records must be an array even while loading)
+    const product = products.find((p) => p.id === productId);
+    const name = product?.productType ?? "";
     setResults((prev) => {
-      const existing = prev[productType];
+      const existing = prev[productId];
       return {
         ...prev,
-        [productType]: existing
+        [productId]: existing
           ? { ...existing, loading: true }
-          : { productType, latest: null, records: [], error: null, loading: true },
+          : { productId, name, latest: null, records: [], error: null, loading: true },
       };
     });
     try {
       const [latest, records] = await Promise.all([
-        api.getLatestState(productType),
-        api.listRecords(productType),
+        api.getLatestState(productId),
+        api.listRecords(productId),
       ]);
       setResults((prev) => ({
         ...prev,
-        [productType]: { productType, latest, records, error: null, loading: false },
+        [productId]: { productId, name, latest, records, error: null, loading: false },
       }));
     } catch (err) {
       setResults((prev) => ({
         ...prev,
-        [productType]: {
-          productType,
-          latest: prev[productType]?.latest ?? null,
-          records: prev[productType]?.records ?? [],
+        [productId]: {
+          productId,
+          name,
+          latest: prev[productId]?.latest ?? null,
+          records: prev[productId]?.records ?? [],
           error: api.errorMessage(err),
           loading: false,
         },
       }));
     }
-  }, []);
+  }, [products]);
 
   useEffect(() => {
-    for (const name of selectedTypes) {
-      void loadProduct(name);
+    for (const productId of selectedIds) {
+      void loadProduct(productId);
     }
-  }, [selectedTypes, loadProduct]);
+  }, [selectedIds, loadProduct]);
 
-  const selectedResults = selectedTypes
-    .map((name) => results[name])
+  const selectedResults = selectedIds
+    .map((id) => results[id])
     .filter((r): r is ProductResult => Boolean(r));
 
   const mergedFeed = useMemo(() => {
     const rows = selectedResults
-      .flatMap((r) => r.records.map((record) => ({ productType: r.productType, record })))
+      .flatMap((r) => r.records.map((record) => ({ name: r.name, record })))
       .sort((a, b) => {
         if (a.record.createdAt !== b.record.createdAt) {
           return a.record.createdAt < b.record.createdAt ? 1 : -1;
@@ -138,7 +142,7 @@ export function QueryPage() {
           </Card>
         )}
 
-        {selectedTypes.length === 0 && products.length > 0 && (
+        {selectedIds.length === 0 && products.length > 0 && (
           <Card className="p-10 text-center">
             <CheckCircle2 className="mx-auto size-10 text-slate-300" />
             <p className="mt-3 font-medium text-slate-600">在左侧勾选商品开始查询</p>
@@ -148,12 +152,12 @@ export function QueryPage() {
           </Card>
         )}
 
-        {selectedTypes.length > 0 && (
+        {selectedIds.length > 0 && (
           <>
             {anyLoading && <CenteredSpinner label="加载商品数据…" />}
             <div className={cn("grid gap-4", selectedResults.length > 1 && "sm:grid-cols-2")}>
               {selectedResults.map((result) => (
-                <ProductCard key={result.productType} result={result} onRetry={() => void loadProduct(result.productType)} />
+                <ProductCard key={result.productId} result={result} onRetry={() => void loadProduct(result.productId)} />
               ))}
             </div>
 
@@ -168,7 +172,7 @@ export function QueryPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    for (const name of selectedTypes) void loadProduct(name);
+                    for (const productId of selectedIds) void loadProduct(productId);
                   }}
                   className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
                 >
@@ -192,12 +196,12 @@ export function QueryPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {mergedFeed.map(({ productType, record }) => (
+                      {mergedFeed.map(({ name, record }) => (
                         <tr key={record.id} className="border-t border-slate-100 text-slate-600 hover:bg-slate-50">
                           <td className="px-5 py-3 tabular-nums whitespace-nowrap">
                             {formatDateTime(record.createdAt)}
                           </td>
-                          <td className="px-4 py-3 font-medium text-slate-800">{productType}</td>
+                          <td className="px-4 py-3 font-medium text-slate-800">{name}</td>
                           <td className="px-4 py-3">
                             <RecordBadge kind={record.kind} />
                           </td>
@@ -242,7 +246,7 @@ function ProductCard({
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3.5">
-        <p className="font-semibold text-slate-900">{result.productType}</p>
+        <p className="font-semibold text-slate-900">{result.name}</p>
         <div className="flex items-center gap-1.5 text-xs">
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
             已结算 {settledCycles} 期

@@ -22,7 +22,7 @@ interface SummaryDb {
 }
 
 function scopeWhere(scope: Scope) {
-  return { userId: scope.userId, productType: scope.productType };
+  return { userId: scope.userId, productId: scope.productId };
 }
 
 export async function addRecord(
@@ -36,6 +36,7 @@ export async function addRecord(
   }
   await client.scopeRecord.create({ data: { ...scopeWhere(scope), kind, amount } });
 }
+
 
 // purchase returns false instead of throwing on an invalid amount, so the
 // caller can react to a rejected purchase bill.

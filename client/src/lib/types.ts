@@ -19,7 +19,9 @@ export interface RecordEntry {
 }
 
 export interface ProductItem {
+  id: number;
   productType: string;
+  orderMultiple: number;
   createdAt: string;
 }
 
@@ -51,5 +53,6 @@ export interface SalesPrediction {
   available: number;
   safetyStock: number;
   suggestedAmount: number;
+  orderMultiple: number;
   forecast: ForecastInfo;
 }

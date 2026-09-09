@@ -54,7 +54,7 @@ function toSnapshot(row: CycleState): StateSnapshot {
 }
 
 function scopeWhere(scope: Scope) {
-  return { userId: scope.userId, productType: scope.productType };
+  return { userId: scope.userId, productId: scope.productId };
 }
 
 type StateClient = Pick<DbClient, "cycleState">;
@@ -65,7 +65,7 @@ export async function getState(
   client: StateClient = db,
 ): Promise<StateSnapshot | null> {
   const row = await client.cycleState.findUnique({
-    where: { userId_productType_cycle: { ...scopeWhere(scope), cycle } },
+    where: { productId_cycle: { productId: scope.productId, cycle } },
   });
   return row ? toSnapshot(row) : null;
 }
@@ -93,8 +93,8 @@ export async function listStates(
 }
 
 // Append one more cycle snapshot: the next cycle number follows the latest
-// one. The @@unique([userId, productType, cycle]) constraint guards against
-// double summarization.
+// one. The @@unique([productId, cycle]) constraint guards against double
+// summarization.
 export async function advanceCycle(
   scope: Scope,
   input: CycleInput,

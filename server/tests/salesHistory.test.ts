@@ -95,7 +95,8 @@ describe("buildDailySalesSeries", () => {
   it("returns an empty series without any data and isolates scopes", async () => {
     const scope = await createScope();
     expect(await buildDailySalesSeries(scope)).toEqual([]);
-    const other = scopeFor(await createUser("other"), scope.productType);
+    const otherUserId = await createUser("other");
+    const other = scopeFor(otherUserId, await createProduct(otherUserId, "widget"));
     await importSales(scope, [{ date: daysAgo(1), amount: 9 }]);
     expect(await buildDailySalesSeries(other)).toEqual([]);
   });
@@ -106,8 +107,8 @@ describe("importSalesMany (multi-product)", () => {
 
   it("imports rows for several existing products in one batch", async () => {
     const userId = await createUser("owner");
-    await createProduct(userId, "tee");
-    await createProduct(userId, "shirt");
+    const teeId = await createProduct(userId, "tee");
+    const shirtId = await createProduct(userId, "shirt");
 
     const imported = await importSalesMany(userId, [
       { productType: "tee", date: daysAgo(2), amount: 10 },
@@ -115,8 +116,8 @@ describe("importSalesMany (multi-product)", () => {
       { productType: "shirt", date: daysAgo(1), amount: 5 },
     ]);
     expect(imported).toBe(3);
-    expect(await listImported(scopeFor(userId, "tee"))).toHaveLength(2);
-    expect(await listImported(scopeFor(userId, "shirt"))).toHaveLength(1);
+    expect(await listImported(scopeFor(userId, teeId))).toHaveLength(2);
+    expect(await listImported(scopeFor(userId, shirtId))).toHaveLength(1);
   });
 
   it("rejects the whole batch when any product is missing", async () => {

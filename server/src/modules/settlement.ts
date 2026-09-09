@@ -35,12 +35,12 @@ export function msUntilNextSettle(now: Date, time: SettleTime): number {
 // total number of cycles created.
 export async function runDailySettlement(): Promise<number> {
   const scopes = await db.scopeRecord.groupBy({
-    by: ["userId", "productType"],
+    by: ["userId", "productId"],
     where: { cycle: null },
   });
   let cycles = 0;
-  for (const { userId, productType } of scopes) {
-    cycles += await settlePendingByDay({ userId, productType });
+  for (const { userId, productId } of scopes) {
+    cycles += await settlePendingByDay({ userId, productId });
   }
   return cycles;
 }

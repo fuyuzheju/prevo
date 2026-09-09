@@ -27,7 +27,7 @@ interface SalesDb {
 }
 
 function scopeWhere(scope: Scope) {
-  return { userId: scope.userId, productType: scope.productType };
+  return { userId: scope.userId, productId: scope.productId };
 }
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -94,9 +94,9 @@ export async function importSales(
   return parsed.length;
 }
 
-// Multi-product import (one sheet, many products). Every product must already
-// exist for the user; otherwise the whole batch is rejected with the missing
-// names so nothing is imported half-way.
+// Multi-product import (one sheet, many products). Rows reference products by
+// their display name; names are resolved to ids so a rename never breaks the
+// import file. The whole batch is rejected when any name is unknown.
 export async function importSalesMany(
   userId: number,
   entries: unknown,
@@ -116,10 +116,10 @@ export async function importSalesMany(
   const names = [...new Set(parsed.map((row) => row.productType))];
   const existing = await client.product.findMany({
     where: { userId, productType: { in: names } },
-    select: { productType: true },
+    select: { id: true, productType: true },
   });
-  const existingNames = new Set(existing.map((row) => row.productType));
-  const missing = names.filter((name) => !existingNames.has(name));
+  const byName = new Map(existing.map((row) => [row.productType, row.id]));
+  const missing = names.filter((name) => !byName.has(name));
   if (missing.length > 0) {
     throw new ApiError(
       400,
@@ -128,14 +128,23 @@ export async function importSalesMany(
     );
   }
 
-  await client.importedSale.createMany({
-    data: parsed.map((row) => ({
+  const rows = parsed.map((row) => {
+    const productId = byName.get(row.productType);
+    if (productId === undefined) {
+      throw new ApiError(
+        400,
+        "PRODUCT_NOT_FOUND",
+        `请先在商品管理中创建:${row.productType}`,
+      );
+    }
+    return {
       userId,
-      productType: row.productType,
+      productId,
       date: parseLocalDateKey(row.date),
       amount: row.amount,
-    })),
+    };
   });
+  await client.importedSale.createMany({ data: rows });
   return parsed.length;
 }
 

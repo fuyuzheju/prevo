@@ -1,4 +1,5 @@
 import { Router, type Request, type RequestHandler } from "express";
+import { db } from "../db.js";
 import { ApiError } from "../errors.js";
 import { isQuantity, type Scope } from "../../../shared/model.ts";
 import * as userSystem from "./userSystem.js";
@@ -75,12 +76,12 @@ authRouter.delete("/me", requireAuth, async (req, res) => {
 export const productsRouter: Router = Router();
 productsRouter.use(requireAuth);
 
-function scopeOf(req: Request): Scope {
-  const { productType } = req.params;
-  if (typeof productType !== "string" || productType.length === 0 || productType.length > 64) {
-    throw new ApiError(400, "INVALID_PRODUCT_TYPE", "productType must be 1-64 characters");
+function productScopeOf(req: Request): Scope {
+  const productId = Number(req.params.productId);
+  if (!Number.isSafeInteger(productId) || productId < 1) {
+    throw new ApiError(400, "INVALID_PRODUCT_ID", "productId must be a positive integer");
   }
-  return { userId: authUserOf(req).id, productType };
+  return { userId: authUserOf(req).id, productId };
 }
 
 function amountOf(req: Request): number {
@@ -93,22 +94,36 @@ function amountOf(req: Request): number {
 
 // Every scope-facing route requires the product to exist.
 async function requireProduct(req: Request) {
-  await productModule.assertProduct(scopeOf(req));
+  await productModule.assertProduct(productScopeOf(req));
 }
 
-// collection routes (must be registered before the :productType routes)
+// collection routes (must be registered before the :productId routes)
 productsRouter.get("/", async (req, res) => {
   const items = await productModule.listProducts(authUserOf(req).id);
   res.json({ products: items });
 });
 
 productsRouter.post("/", async (req, res) => {
-  const product = await productModule.createProduct(authUserOf(req).id, bodyValue(req, "productType"));
+  const product = await productModule.createProduct(
+    authUserOf(req).id,
+    bodyValue(req, "productType"),
+    bodyValue(req, "orderMultiple"),
+  );
   res.status(201).json({ product });
 });
 
-productsRouter.delete("/:productType", async (req, res) => {
-  await productModule.removeProduct(authUserOf(req).id, scopeOf(req).productType);
+productsRouter.patch("/:productId", async (req, res) => {
+  const scope = productScopeOf(req);
+  const product = await productModule.updateProduct(scope.userId, scope.productId, {
+    productType: bodyValue(req, "productType"),
+    orderMultiple: bodyValue(req, "orderMultiple"),
+  });
+  res.json({ product });
+});
+
+productsRouter.delete("/:productId", async (req, res) => {
+  const scope = productScopeOf(req);
+  await productModule.removeProduct(scope.userId, scope.productId);
   res.status(204).end();
 });
 
@@ -124,105 +139,113 @@ salesRouter.post("/import", async (req, res) => {
 });
 
 // scope routes
-productsRouter.get("/:productType/state", async (req, res) => {
+productsRouter.get("/:productId/state", async (req, res) => {
   await requireProduct(req);
-  const snapshot = await stateMachine.getLatestState(scopeOf(req));
+  const snapshot = await stateMachine.getLatestState(productScopeOf(req));
   if (!snapshot) {
     throw new ApiError(404, "NO_STATE", "this scope has no cycle state yet");
   }
   res.json({ state: snapshot });
 });
 
-productsRouter.get("/:productType/states", async (req, res) => {
+productsRouter.get("/:productId/states", async (req, res) => {
   await requireProduct(req);
-  const states = await stateMachine.listStates(scopeOf(req));
+  const states = await stateMachine.listStates(productScopeOf(req));
   res.json({ states });
 });
 
-productsRouter.get("/:productType/records", async (req, res) => {
+productsRouter.get("/:productId/records", async (req, res) => {
   await requireProduct(req);
-  const records = await stateSummary.listRecords(scopeOf(req));
+  const records = await stateSummary.listRecords(productScopeOf(req));
   res.json({ records });
 });
 
 // --- prediction & imported sales history ---
 
-productsRouter.get("/:productType/predict", async (req, res) => {
+productsRouter.get("/:productId/predict", async (req, res) => {
   await requireProduct(req);
-  const scope = scopeOf(req);
-  const { series, available, safetyStock, suggestedAmount, forecast } = await decidePurchase(scope);
-  const imported = await salesHistory.listImported(scope);
+  const scope = productScopeOf(req);
+  const { series, available, safetyStock, suggestedAmount, orderMultiple, forecast } =
+    await decidePurchase(scope);
+  const [imported, product] = await Promise.all([
+    salesHistory.listImported(scope),
+    db.product.findUnique({ where: { id: scope.productId }, select: { productType: true } }),
+  ]);
+  if (product === null) {
+    throw new ApiError(404, "PRODUCT_NOT_FOUND", "this product does not exist");
+  }
   res.json({
-    productType: scope.productType,
+    productType: product.productType,
     series,
     importedCount: imported.length,
     available,
     safetyStock,
     suggestedAmount,
+    orderMultiple,
     forecast,
   });
 });
 
-productsRouter.post("/:productType/sales/import", async (req, res) => {
+productsRouter.post("/:productId/sales/import", async (req, res) => {
   await requireProduct(req);
-  const imported = await salesHistory.importSales(scopeOf(req), bodyValue(req, "entries"));
+  const imported = await salesHistory.importSales(productScopeOf(req), bodyValue(req, "entries"));
   res.status(201).json({ imported });
 });
 
-productsRouter.get("/:productType/sales/import", async (req, res) => {
+productsRouter.get("/:productId/sales/import", async (req, res) => {
   await requireProduct(req);
-  const entries = await salesHistory.listImported(scopeOf(req));
+  const entries = await salesHistory.listImported(productScopeOf(req));
   res.json({ entries });
 });
 
-productsRouter.delete("/:productType/sales/import/:id", async (req, res) => {
+productsRouter.delete("/:productId/sales/import/:id", async (req, res) => {
   await requireProduct(req);
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id)) {
     throw new ApiError(400, "INVALID_ID", "invalid imported sale id");
   }
-  await salesHistory.removeImported(scopeOf(req), id);
+  await salesHistory.removeImported(productScopeOf(req), id);
   res.status(204).end();
 });
 
-productsRouter.delete("/:productType/sales/import", async (req, res) => {
+productsRouter.delete("/:productId/sales/import", async (req, res) => {
   await requireProduct(req);
-  await salesHistory.clearImported(scopeOf(req));
+  await salesHistory.clearImported(productScopeOf(req));
   res.status(204).end();
 });
 
-productsRouter.post("/:productType/purchase", async (req, res) => {
+productsRouter.post("/:productId/purchase", async (req, res) => {
   await requireProduct(req);
-  const scope = scopeOf(req);
+  const scope = productScopeOf(req);
   const amount = bodyValue(req, "amount");
   const ok = await stateSummary.purchase(scope, isQuantity(amount) ? amount : 0);
   res.json({ ok });
 });
 
-productsRouter.post("/:productType/sell", async (req, res) => {
+productsRouter.post("/:productId/sell", async (req, res) => {
   await requireProduct(req);
-  const scope = scopeOf(req);
+  const scope = productScopeOf(req);
   await stateSummary.sell(scope, amountOf(req));
   res.status(204).end();
 });
 
-productsRouter.post("/:productType/send", async (req, res) => {
+productsRouter.post("/:productId/send", async (req, res) => {
   await requireProduct(req);
-  const scope = scopeOf(req);
+  const scope = productScopeOf(req);
   await stateSummary.send(scope, amountOf(req));
   res.status(204).end();
 });
 
-productsRouter.post("/:productType/receive", async (req, res) => {
+productsRouter.post("/:productId/receive", async (req, res) => {
   await requireProduct(req);
-  const scope = scopeOf(req);
+  const scope = productScopeOf(req);
   await stateSummary.receive(scope, amountOf(req));
   res.status(204).end();
 });
 
-productsRouter.post("/:productType/summarize", async (req, res) => {
+productsRouter.post("/:productId/summarize", async (req, res) => {
   await requireProduct(req);
-  const state = await stateSummary.summarize(scopeOf(req));
+  const state = await stateSummary.summarize(productScopeOf(req));
   res.json({ state });
 });
 

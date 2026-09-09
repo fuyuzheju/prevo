@@ -1,11 +1,12 @@
 // Domain model shared by server and client. Pure types and validators only:
 // no framework or runtime dependencies, no imports from other shared files.
 
-// Everything is scoped by (userId, productType). Product management itself
-// lives above this layer (see docs/struc.md).
+// Everything is scoped by (userId, productId). The product id is the stable
+// identity of a product; its display name (productType) is editable and never
+// used as a data key.
 export interface Scope {
   userId: number;
-  productType: string;
+  productId: number;
 }
 
 // Snapshot of one completed cycle (docs/state.md). All amounts are

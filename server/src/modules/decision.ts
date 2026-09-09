@@ -18,7 +18,15 @@ export interface PurchaseDecision {
   available: number;
   safetyStock: number;
   suggestedAmount: number;
+  orderMultiple: number;
   forecast: TwoWeekForecast;
+}
+
+// Purchases must be multiples of the product's order multiple, so the raw
+// suggestion is rounded UP to the nearest multiple (0 stays 0).
+function roundUpToMultiple(raw: number, orderMultiple: number): number {
+  if (raw <= 0) return 0;
+  return Math.ceil(raw / orderMultiple) * orderMultiple;
 }
 
 type PositionDb = Pick<DbClient, "cycleState" | "scopeRecord">;
@@ -36,7 +44,7 @@ export async function getLivePosition(
   const [snapshot, records] = await Promise.all([
     getLatestState(scope, client),
     client.scopeRecord.findMany({
-      where: { userId: scope.userId, productType: scope.productType, cycle: null },
+      where: { userId: scope.userId, productId: scope.productId, cycle: null },
       select: { kind: true, amount: true },
     }),
   ]);
@@ -55,12 +63,24 @@ export async function decidePurchase(
   scope: Scope,
   client: DbClient = db,
 ): Promise<PurchaseDecision & { series: SalesDay[] }> {
-  const [series, position] = await Promise.all([
+  const [series, position, product] = await Promise.all([
     buildDailySalesSeries(scope, client),
     getLivePosition(scope, client),
+    client.product.findUnique({
+      where: { id: scope.productId },
+      select: { orderMultiple: true },
+    }),
   ]);
+  const orderMultiple = product?.orderMultiple ?? 1;
   const forecast = forecastNext14Days(series.map((day) => ({ total: day.sale })));
   const safetyStock = forecast.predictedTotal;
-  const suggestedAmount = Math.max(0, safetyStock - position.available);
-  return { available: position.available, safetyStock, suggestedAmount, forecast, series };
+  const suggestedAmount = roundUpToMultiple(safetyStock - position.available, orderMultiple);
+  return {
+    available: position.available,
+    safetyStock,
+    suggestedAmount,
+    orderMultiple,
+    forecast,
+    series,
+  };
 }

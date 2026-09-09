@@ -9,11 +9,11 @@ export interface ProductSidebarProps {
   products: readonly ProductItem[];
   loading?: boolean;
   mode: SidebarMode;
-  checked?: ReadonlySet<string>;
-  selected?: string | null;
-  onToggle?: (productType: string, next: boolean) => void;
+  checked?: ReadonlySet<number>;
+  selected?: number | null;
+  onToggle?: (productId: number, next: boolean) => void;
   onToggleAll?: (next: boolean) => void;
-  onSelect?: (productType: string | null) => void;
+  onSelect?: (productId: number | null) => void;
 }
 
 function Checkbox({ on, small }: { on: boolean; small?: boolean }) {
@@ -41,7 +41,7 @@ export function ProductSidebar({
   onToggleAll,
   onSelect,
 }: ProductSidebarProps) {
-  const allChecked = products.length > 0 && products.every((p) => checked?.has(p.productType));
+  const allChecked = products.length > 0 && products.every((p) => checked?.has(p.id));
 
   const chipRow = (
     <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 lg:hidden">
@@ -55,14 +55,14 @@ export function ProductSidebar({
         </button>
       ) : null}
       {products.map((product) => {
-        const active = mode === "check" ? checked?.has(product.productType) : selected === product.productType;
+        const active = mode === "check" ? checked?.has(product.id) : selected === product.id;
         return (
           <button
-            key={product.productType}
+            key={product.id}
             type="button"
             onClick={() => {
-              if (mode === "check") onToggle?.(product.productType, !active);
-              else onSelect?.(active ? null : product.productType);
+              if (mode === "check") onToggle?.(product.id, !active);
+              else onSelect?.(active ? null : product.id);
             }}
             className={cn(
               "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors",
@@ -119,14 +119,14 @@ export function ProductSidebar({
             )}
             {products.map((product) => {
               const active =
-                mode === "check" ? checked?.has(product.productType) : selected === product.productType;
+                mode === "check" ? checked?.has(product.id) : selected === product.id;
               return (
-                <li key={product.productType}>
+                <li key={product.id}>
                   <button
                     type="button"
                     onClick={() => {
-                      if (mode === "check") onToggle?.(product.productType, !active);
-                      else onSelect?.(active ? null : product.productType);
+                      if (mode === "check") onToggle?.(product.id, !active);
+                      else onSelect?.(active ? null : product.id);
                     }}
                     className={cn(
                       "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm transition-colors",

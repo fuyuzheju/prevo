@@ -98,8 +98,8 @@ describe("changePassword and removeUser", () => {
 
   it("removeUser deletes the account with its products, states, records and imports", async () => {
     const userId = await registerAlice();
-    const scope = { userId, productType: "widget" };
-    await db.product.create({ data: scope });
+    const productRow = await db.product.create({ data: { userId, productType: "widget" } });
+    const scope = { userId, productId: productRow.id };
     await db.importedSale.create({ data: { ...scope, date: new Date(2026, 7, 1), amount: 9 } });
     await advanceCycle(scope, { sent: 0, received: 0, sale: 10, purchase: 10 });
     await db.scopeRecord.create({ data: { ...scope, kind: "SELL", amount: 5 } });

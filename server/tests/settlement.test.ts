@@ -7,7 +7,7 @@ import {
 } from "../src/modules/settlement.js";
 import { listRecords, settlePendingByDay } from "../src/modules/stateSummary.js";
 import { listStates } from "../src/modules/stateMachine.js";
-import { createScope, createUser, scopeFor, truncateAll } from "./helpers.js";
+import { createProduct, createScope, createUser, scopeFor, truncateAll } from "./helpers.js";
 
 describe("parseSettleTime", () => {
   it("defaults to 00:05", () => {
@@ -43,7 +43,7 @@ describe("msUntilNextSettle", () => {
 });
 
 async function createRecord(
-  scope: { userId: number; productType: string },
+  scope: { userId: number; productId: number },
   kind: "PURCHASE" | "SELL" | "SEND" | "RECEIVE",
   amount: number,
   createdAt: Date,
@@ -97,7 +97,8 @@ describe("settlePendingByDay", () => {
   it("isolates scopes", async () => {
     const scope = await createScope();
     await createRecord(scope, "PURCHASE", 10, new Date(2026, 8, 5, 12, 0));
-    const other = scopeFor(await createUser("other"), "widget");
+    const otherUserId = await createUser("other");
+    const other = scopeFor(otherUserId, await createProduct(otherUserId, "widget"));
     expect(await settlePendingByDay(other)).toBe(0);
     expect(await settlePendingByDay(scope)).toBe(1);
   });
@@ -108,10 +109,11 @@ describe("runDailySettlement", () => {
 
   it("settles every scope that has pending records", async () => {
     const user = await createUser("owner");
-    const a = scopeFor(user, "widget");
-    const b = scopeFor(user, "gadget");
-    const otherUserScope = scopeFor(await createUser("other"), "widget");
-    const empty = scopeFor(user, "spare");
+    const a = scopeFor(user, await createProduct(user, "widget"));
+    const b = scopeFor(user, await createProduct(user, "gadget"));
+    const otherUserId = await createUser("other");
+    const otherUserScope = scopeFor(otherUserId, await createProduct(otherUserId, "widget"));
+    const empty = scopeFor(user, await createProduct(user, "spare"));
     await createRecord(a, "PURCHASE", 10, new Date(2026, 8, 5, 12, 0));
     await createRecord(b, "SELL", 7, new Date(2026, 8, 5, 12, 0));
     await createRecord(otherUserScope, "RECEIVE", 3, new Date(2026, 8, 5, 12, 0));

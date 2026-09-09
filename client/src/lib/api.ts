@@ -130,7 +130,12 @@ function decodeStateSnapshot(record: Record<string, unknown>): StateSnapshot {
 }
 
 function decodeProductItem(record: Record<string, unknown>): ProductItem {
-  return { productType: stringField(record, "productType"), createdAt: stringField(record, "createdAt") };
+  return {
+    id: numberField(record, "id"),
+    productType: stringField(record, "productType"),
+    orderMultiple: numberField(record, "orderMultiple"),
+    createdAt: stringField(record, "createdAt"),
+  };
 }
 
 function decodeRecordEntry(record: Record<string, unknown>): RecordEntry {
@@ -164,8 +169,8 @@ function decodeImportedSale(record: Record<string, unknown>): ImportedSaleItem {
   };
 }
 
-function productPath(productType: string, suffix = ""): string {
-  return `/products/${encodeURIComponent(productType)}${suffix}`;
+function productPath(productId: number, suffix = ""): string {
+  return `/products/${productId}${suffix}`;
 }
 
 // --- auth ---
@@ -212,15 +217,36 @@ export async function listProducts(): Promise<ProductItem[]> {
   return list.map((item) => itemField(item, decodeProductItem));
 }
 
-export async function createProduct(productType: string): Promise<ProductItem> {
-  const { data } = await send("/products", { method: "POST", body: { productType } });
+export async function createProduct(
+  productType: string,
+  orderMultiple?: number,
+): Promise<ProductItem> {
+  const { data } = await send("/products", {
+    method: "POST",
+    body: orderMultiple === undefined ? { productType } : { productType, orderMultiple },
+  });
   const record = recordOf(data);
   if (record === null) badResponse();
   return decodeProductItem(recordField(record, "product"));
 }
 
-export async function deleteProduct(productType: string): Promise<void> {
-  await send(productPath(productType), { method: "DELETE" });
+export interface ProductPatch {
+  productType?: string;
+  orderMultiple?: number;
+}
+
+export async function updateProduct(productId: number, patch: ProductPatch): Promise<ProductItem> {
+  const { data } = await send(productPath(productId), {
+    method: "PATCH",
+    body: patch,
+  });
+  const record = recordOf(data);
+  if (record === null) badResponse();
+  return decodeProductItem(recordField(record, "product"));
+}
+
+export async function deleteProduct(productId: number): Promise<void> {
+  await send(productPath(productId), { method: "DELETE" });
 }
 
 // --- product data ---
@@ -228,9 +254,9 @@ export async function deleteProduct(productType: string): Promise<void> {
 const NO_STATE = "NO_STATE";
 
 // null when the scope has no cycle state yet (404 NO_STATE).
-export async function getLatestState(productType: string): Promise<StateSnapshot | null> {
+export async function getLatestState(productId: number): Promise<StateSnapshot | null> {
   try {
-    const { data } = await send(productPath(productType, "/state"));
+    const { data } = await send(productPath(productId, "/state"));
     const record = recordOf(data);
     if (record === null) badResponse();
     return decodeStateSnapshot(recordField(record, "state"));
@@ -240,8 +266,8 @@ export async function getLatestState(productType: string): Promise<StateSnapshot
   }
 }
 
-export async function listRecords(productType: string): Promise<RecordEntry[]> {
-  const { data } = await send(productPath(productType, "/records"));
+export async function listRecords(productId: number): Promise<RecordEntry[]> {
+  const { data } = await send(productPath(productId, "/records"));
   const record = recordOf(data);
   if (record === null) badResponse();
   const list = record["records"];
@@ -250,14 +276,13 @@ export async function listRecords(productType: string): Promise<RecordEntry[]> {
 }
 
 // purchase resolves to false instead of erroring on an invalid amount
-export async function addRecord(
-  productType: string,
+export async function addRecord(productId: number,
   kind: RecordKind,
   amount: number,
 ): Promise<boolean> {
   const body = { amount };
   if (kind === "PURCHASE") {
-    const { data } = await send(productPath(productType, "/purchase"), { method: "POST", body });
+    const { data } = await send(productPath(productId, "/purchase"), { method: "POST", body });
     const record = recordOf(data);
     if (record === null) badResponse();
     const ok = record["ok"];
@@ -265,14 +290,14 @@ export async function addRecord(
     return ok;
   }
   const suffix = `/${kind.toLowerCase()}`;
-  await send(productPath(productType, suffix), { method: "POST", body });
+  await send(productPath(productId, suffix), { method: "POST", body });
   return true;
 }
 
 // --- sales prediction ---
 
-export async function getPrediction(productType: string): Promise<SalesPrediction> {
-  const { data } = await send(productPath(productType, "/predict"));
+export async function getPrediction(productId: number): Promise<SalesPrediction> {
+  const { data } = await send(productPath(productId, "/predict"));
   const record = recordOf(data);
   if (record === null) badResponse();
   const seriesValue = record["series"];
@@ -285,6 +310,7 @@ export async function getPrediction(productType: string): Promise<SalesPredictio
     available: numberField(record, "available"),
     safetyStock: numberField(record, "safetyStock"),
     suggestedAmount: numberField(record, "suggestedAmount"),
+    orderMultiple: numberField(record, "orderMultiple"),
     forecast: {
       windowDays: numberField(forecast, "windowDays"),
       dailyRate: numberField(forecast, "dailyRate"),
@@ -303,8 +329,8 @@ export async function importSalesMany(
   return numberField(record, "imported");
 }
 
-export async function listImportedSales(productType: string): Promise<ImportedSaleItem[]> {
-  const { data } = await send(productPath(productType, "/sales/import"));
+export async function listImportedSales(productId: number): Promise<ImportedSaleItem[]> {
+  const { data } = await send(productPath(productId, "/sales/import"));
   const record = recordOf(data);
   if (record === null) badResponse();
   const list = record["entries"];
@@ -312,12 +338,12 @@ export async function listImportedSales(productType: string): Promise<ImportedSa
   return list.map((item) => itemField(item, decodeImportedSale));
 }
 
-export async function deleteImportedSale(productType: string, id: number): Promise<void> {
-  await send(productPath(productType, `/sales/import/${id}`), { method: "DELETE" });
+export async function deleteImportedSale(productId: number, id: number): Promise<void> {
+  await send(productPath(productId, `/sales/import/${id}`), { method: "DELETE" });
 }
 
-export async function clearImportedSales(productType: string): Promise<void> {
-  await send(productPath(productType, "/sales/import"), { method: "DELETE" });
+export async function clearImportedSales(productId: number): Promise<void> {
+  await send(productPath(productId, "/sales/import"), { method: "DELETE" });
 }
 
 export function errorMessage(error: unknown): string {

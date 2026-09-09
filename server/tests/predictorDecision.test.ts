@@ -94,4 +94,52 @@ describe("decidePurchase", () => {
     // inventory 100 + pending received 30 − sold 20, minus the 30 now out of transit
     expect(decision.available).toBe(80);
   });
+
+  it("rounds the suggestion up to the product's orderMultiple", async () => {
+    const scope = await createScope();
+    await db.product.update({
+      where: { id: scope.productId },
+      data: { orderMultiple: 20 },
+    });
+    // series: yesterday 100 (imported) + today 30 (real sell) → window 2 days
+    await importSales(scope, [{ date: localKeyOf(addLocalDays(new Date(), -1)), amount: 100 }]);
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 30, cycle: null, createdAt: new Date() },
+    });
+
+    const decision = await decidePurchase(scope);
+    expect(decision.orderMultiple).toBe(20);
+    expect(decision.safetyStock).toBe(910); // (100 + 30) / 2 × 14
+    expect(decision.safetyStock - decision.available).toBe(940);
+    expect(decision.suggestedAmount).toBe(940); // already a multiple of 20
+  });
+
+  it("rounds a small raw need up and keeps zero when nothing is needed", async () => {
+    const scope = await createScope();
+    await db.product.update({
+      where: { id: scope.productId },
+      data: { orderMultiple: 10 },
+    });
+    // raw need = 7 → rounds up to 10
+    await importSales(scope, [{ date: localKeyOf(addLocalDays(new Date(), -1)), amount: 1 }]);
+    const decision = await decidePurchase(scope);
+    expect(decision.suggestedAmount).toBe(10);
+    expect(decision.suggestedAmount % 10).toBe(0);
+
+    // plenty of stock: raw need ≤ 0 stays 0
+    const stocked = await createScope();
+    await db.product.update({
+      where: {
+        id: stocked.productId,
+      },
+      data: { orderMultiple: 50 },
+    });
+    await advanceCycle(stocked, { sent: 0, received: 500, sale: 5, purchase: 500 });
+    const none = await decidePurchase(stocked);
+    expect(none.suggestedAmount).toBe(0);
+  });
 });
+
+function localKeyOf(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}

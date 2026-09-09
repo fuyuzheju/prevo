@@ -10,7 +10,14 @@ import {
   listRecords,
 } from "../src/modules/stateSummary.js";
 import { getLatestState, listStates } from "../src/modules/stateMachine.js";
-import { createScope, createUser, mustDefined, scopeFor, truncateAll } from "./helpers.js";
+import {
+  createProduct,
+  createScope,
+  createUser,
+  mustDefined,
+  scopeFor,
+  truncateAll,
+} from "./helpers.js";
 
 describe("records within a cycle", () => {
   beforeEach(truncateAll);
@@ -105,8 +112,9 @@ describe("summarize", () => {
   });
 
   it("isolates records by scope", async () => {
-    const a = scopeFor(await createUser("user-a"), "widget");
-    const b = scopeFor(a.userId, "gadget");
+    const owner = await createUser("user-a");
+    const a = scopeFor(owner, await createProduct(owner, "widget"));
+    const b = scopeFor(owner, await createProduct(owner, "gadget"));
     await purchase(a, 100);
     expect(await summarize(b)).toBeNull();
     expect(await getLatestState(a)).toBeNull();
@@ -141,7 +149,8 @@ describe("listRecords", () => {
   it("respects scope isolation", async () => {
     const scope = await createScope();
     await purchase(scope, 5);
-    const other = scopeFor(await createUser("other"), "widget");
+    const otherUserId = await createUser("other");
+    const other = scopeFor(otherUserId, await createProduct(otherUserId, "widget"));
     expect(await listRecords(other)).toEqual([]);
   });
 });

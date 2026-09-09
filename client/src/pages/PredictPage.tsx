@@ -20,16 +20,16 @@ const fmtNum = new Intl.NumberFormat("zh-CN");
 
 export function PredictPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
   const [prediction, setPrediction] = useState<SalesPrediction | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (productType: string) => {
+  const load = useCallback(async (productId: number) => {
     setLoading(true);
     setError(null);
     try {
-      setPrediction(await api.getPrediction(productType));
+      setPrediction(await api.getPrediction(productId));
     } catch (err) {
       setError(api.errorMessage(err));
     } finally {
@@ -137,7 +137,9 @@ export function PredictPage() {
                   value={prediction.suggestedAmount}
                   hint={
                     prediction.suggestedAmount > 0
-                      ? "建议量 = 安全库存 − 当前可用量"
+                      ? prediction.orderMultiple > 1
+                        ? `已按起订点 ${prediction.orderMultiple} 向上取整（安全库存 − 可用量的整数倍）`
+                        : "建议量 = 安全库存 − 当前可用量"
                       : "库存充足，无需采购"
                   }
                 />

@@ -64,7 +64,7 @@ interface AddedItem {
 
 export function RecordsPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
   const [records, setRecords] = useState<RecordEntry[]>([]);
   const [recordsError, setRecordsError] = useState<string | null>(null);
 
@@ -76,10 +76,10 @@ export function RecordsPage() {
 
   const pending = sumPendingByKind(records);
 
-  const loadRecords = useCallback(async (productType: string) => {
+  const loadRecords = useCallback(async (productId: number) => {
     setRecordsError(null);
     try {
-      setRecords(await api.listRecords(productType));
+      setRecords(await api.listRecords(productId));
     } catch (err) {
       setRecordsError(api.errorMessage(err));
     }
@@ -90,7 +90,7 @@ export function RecordsPage() {
     else setRecords([]);
   }, [selected, loadRecords]);
 
-  const handleSelect = (next: string | null) => {
+  const handleSelect = (next: number | null) => {
     setSelected(next);
     setRecords([]); // avoid showing the previous product's data while loading
     setRecordsError(null);
@@ -125,7 +125,7 @@ export function RecordsPage() {
     }
   }
 
-  const product = products.find((p) => p.productType === selected) ?? null;
+  const product = products.find((p) => p.id === selected) ?? null;
   const settledCycles = records.reduce(
     (max, record) => (record.cycle !== null && record.cycle > max ? record.cycle : max),
     0,
@@ -158,7 +158,7 @@ export function RecordsPage() {
           </Card>
         )}
 
-        {products.length > 0 && !selected && (
+        {products.length > 0 && selected === null && (
           <Card className="p-10 text-center">
             <CheckCircle2 className="mx-auto size-10 text-slate-300" />
             <p className="mt-3 font-medium text-slate-600">在左侧选择一个商品</p>
@@ -166,7 +166,7 @@ export function RecordsPage() {
           </Card>
         )}
 
-        {product && selected && (
+        {product && selected !== null && (
           <>
             <Card className="p-5">
               <div className="flex flex-wrap items-center gap-2">

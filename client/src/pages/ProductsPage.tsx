@@ -3,9 +3,11 @@ import {
   DatabaseBackup,
   FileSpreadsheet,
   PackagePlus,
+  Pencil,
   Plus,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { isValidProductName } from "../../../shared/model.ts";
 import * as api from "../lib/api.ts";
@@ -28,6 +30,10 @@ import {
 export function ProductsPage() {
   const { products, loading, error, reload } = useProducts();
   const productNames = useMemo(() => products.map((p) => p.productType), [products]);
+  const nameById = useMemo(
+    () => new Map(products.map((p) => [p.id, p.productType])),
+    [products],
+  );
 
   // ---- excel import ----
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -38,18 +44,18 @@ export function ProductsPage() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importOk, setImportOk] = useState<string | null>(null);
 
-  // ---- imported entries management ----
-  const [importedByProduct, setImportedByProduct] = useState<Record<string, ImportedSaleItem[]>>({});
+  // ---- imported entries management (keyed by product id) ----
+  const [importedByProduct, setImportedByProduct] = useState<Record<number, ImportedSaleItem[]>>({});
   const [importedLoading, setImportedLoading] = useState(false);
-  const [importedFilter, setImportedFilter] = useState<string>("");
+  const [importedFilter, setImportedFilter] = useState<number | null>(null);
 
-  const loadImported = useCallback(async (names: string[]) => {
+  const loadImported = useCallback(async (ids: number[]) => {
     setImportedLoading(true);
     try {
-      const entries = await Promise.all(names.map((name) => api.listImportedSales(name)));
-      const map: Record<string, ImportedSaleItem[]> = {};
-      names.forEach((name, index) => {
-        map[name] = entries[index] ?? [];
+      const entries = await Promise.all(ids.map((id) => api.listImportedSales(id)));
+      const map: Record<number, ImportedSaleItem[]> = {};
+      ids.forEach((id, index) => {
+        map[id] = entries[index] ?? [];
       });
       setImportedByProduct(map);
     } catch {
@@ -59,29 +65,37 @@ export function ProductsPage() {
     }
   }, []);
 
+  const productIds = useMemo(() => products.map((p) => p.id), [products]);
+
   useEffect(() => {
-    if (products.length > 0) void loadImported(productNames);
-  }, [products, productNames, loadImported]);
+    if (productIds.length > 0) void loadImported(productIds);
+  }, [productIds, loadImported]);
 
   // ---- add product ----
   const [name, setName] = useState("");
+  const [orderMultipleInput, setOrderMultipleInput] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addOk, setAddOk] = useState<string | null>(null);
 
-  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  // ---- edit product attributes (dialog) ----
+  const [editing, setEditing] = useState<{ id: number; name: string; multiple: string } | null>(null);
+  const [editingSaving, setEditingSaving] = useState(false);
+  const [editingError, setEditingError] = useState<string | null>(null);
+
+  // ---- delete product ----
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const knownSet = useMemo(() => new Set(productNames), [productNames]);
 
-  // classify parsed rows: valid & product exists vs not
   const unknownNames = useMemo(() => {
     if (!parsed) return new Set<string>();
     return new Set(
       parsed.entries
         .map((entry) => entry.productType)
-        .filter((name) => !knownSet.has(name)),
+        .filter((productName) => !knownSet.has(productName)),
     );
   }, [parsed, knownSet]);
 
@@ -113,7 +127,7 @@ export function ProductsPage() {
       const count = await api.importSalesMany(rows);
       setImportOk(`已导入 ${count} 条销量记录`);
       resetPicked();
-      await loadImported(productNames);
+      await loadImported(productIds);
     } catch (err) {
       setImportError(api.errorMessage(err));
     } finally {
@@ -126,6 +140,13 @@ export function ProductsPage() {
     setParsed(null);
     if (fileRef.current) fileRef.current.value = "";
   };
+
+  function parseOrderMultiple(raw: string): number | undefined {
+    if (raw.trim() === "") return undefined; // 1 = no constraint
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < 1) return Number.NaN;
+    return value;
+  }
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
@@ -140,10 +161,16 @@ export function ProductsPage() {
       setAddError("已有同名商品");
       return;
     }
+    const orderMultiple = parseOrderMultiple(orderMultipleInput);
+    if (orderMultiple === Number.NaN) {
+      setAddError("起订点需为大于等于 1 的整数");
+      return;
+    }
     setAdding(true);
     try {
-      await api.createProduct(trimmed);
+      await api.createProduct(trimmed, orderMultiple);
       setName("");
+      setOrderMultipleInput("");
       setAddOk(`已添加商品「${trimmed}」`);
       await reload();
     } catch (err) {
@@ -153,8 +180,43 @@ export function ProductsPage() {
     }
   }
 
+  function startEdit(productId: number) {
+    const product = products.find((p) => p.id === productId);
+    if (!product) return;
+    setEditing({ id: product.id, name: product.productType, multiple: String(product.orderMultiple) });
+    setEditingError(null);
+  }
+
+  async function saveEdit() {
+    if (!editing) return;
+    const trimmedName = editing.name.trim();
+    if (!isValidProductName(trimmedName)) {
+      setEditingError("商品名称需为 1-40 个字符，且不能包含空白");
+      return;
+    }
+    const multiple = parseOrderMultiple(editing.multiple);
+    if (multiple === Number.NaN) {
+      setEditingError("起订点需为大于等于 1 的整数");
+      return;
+    }
+    setEditingSaving(true);
+    setEditingError(null);
+    try {
+      await api.updateProduct(editing.id, {
+        productType: trimmedName,
+        orderMultiple: multiple ?? 1,
+      });
+      setEditing(null);
+      await reload();
+    } catch (err) {
+      setEditingError(api.errorMessage(err));
+    } finally {
+      setEditingSaving(false);
+    }
+  }
+
   async function handleDelete() {
-    if (!pendingDelete) return;
+    if (pendingDelete === null) return;
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -167,41 +229,41 @@ export function ProductsPage() {
     }
   }
 
-  async function removeImportedRow(productType: string, id: number) {
+  async function removeImportedRow(productId: number, id: number) {
     try {
-      await api.deleteImportedSale(productType, id);
-      await loadImported(productNames);
+      await api.deleteImportedSale(productId, id);
+      await loadImported(productIds);
     } catch (err) {
       setImportError(api.errorMessage(err));
     }
   }
 
   async function clearImportedFilter() {
-    const target = importedFilter || productNames[0];
-    if (!target) return;
+    if (importedFilter === null) return;
     try {
-      await api.clearImportedSales(target);
-      await loadImported(productNames);
+      await api.clearImportedSales(importedFilter);
+      await loadImported(productIds);
     } catch (err) {
       setImportError(api.errorMessage(err));
     }
   }
 
-  const filterNames = importedFilter
-    ? [importedFilter]
-    : productNames.filter((name) => (importedByProduct[name] ?? []).length > 0);
+  const filterIds =
+    importedFilter !== null
+      ? [importedFilter]
+      : productIds.filter((id) => (importedByProduct[id] ?? []).length > 0);
   const importedRows = useMemo(() => {
-    const rows: (ImportedSaleItem & { productType: string })[] = [];
-    for (const name of filterNames) {
-      for (const entry of importedByProduct[name] ?? []) {
-        rows.push({ ...entry, productType: name });
+    const rows: (ImportedSaleItem & { productId: number })[] = [];
+    for (const id of filterIds) {
+      for (const entry of importedByProduct[id] ?? []) {
+        rows.push({ ...entry, productId: id });
       }
     }
     return rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
-  }, [filterNames, importedByProduct]);
+  }, [filterIds, importedByProduct]);
   const importedTotal = Object.values(importedByProduct).reduce((sum, list) => sum + list.length, 0);
 
-  const target = products.find((p) => p.productType === pendingDelete) ?? null;
+  const target = products.find((p) => p.id === pendingDelete) ?? null;
   const groupCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entry of parsed?.entries ?? []) {
@@ -218,13 +280,111 @@ export function ProductsPage() {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900">商品管理</h1>
           <p className="mt-1 text-sm text-slate-500">
-            管理商品种类与历史销量导入，之后可在这里补充商品详细信息。
+            管理商品及其属性（名称、起订点）与历史销量导入，之后可继续补充详细信息。
           </p>
         </div>
 
         {error && <InlineMessage tone="error">{error}</InlineMessage>}
 
         {/* import historical sales (multi-product excel) */}
+
+        {/* add product */}
+        <Card className="p-5 sm:p-6">
+          <h2 className="flex items-center gap-2 font-semibold text-slate-900">
+            <PackagePlus className="size-4 text-blue-600" />
+            新增商品
+          </h2>
+          <form onSubmit={handleCreate} className="mt-4 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-[1fr_10rem_auto] sm:items-end">
+              <Field label="商品名称" hint="1-40 个字符，不含空白">
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="例如：夏季T恤"
+                />
+              </Field>
+              <Field label="起订点" hint="正整数；1 = 不限制">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  value={orderMultipleInput}
+                  onChange={(e) => setOrderMultipleInput(e.target.value)}
+                  placeholder="1"
+                />
+              </Field>
+              <Button type="submit" loading={adding} className="shrink-0">
+                <Plus className="size-4" />
+                添加
+              </Button>
+            </div>
+            {addError && <InlineMessage tone="error">{addError}</InlineMessage>}
+            {addOk && <InlineMessage tone="success">{addOk}</InlineMessage>}
+          </form>
+        </Card>
+
+        {/* product list */}
+        <Card>
+          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+            <h2 className="font-semibold text-slate-900">
+              商品列表
+              <span className="ml-2 text-sm font-normal tabular-nums text-slate-400">
+                {products.length} 种
+              </span>
+            </h2>
+          </div>
+          {products.length === 0 && !loading ? (
+            <p className="px-5 py-10 text-center text-sm text-slate-400">
+              还没有商品，用上方表单添加第一个吧
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {products.map((product) => (
+                <li key={product.id} className="flex items-center gap-3 px-5 py-3.5">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 font-semibold text-blue-600">
+                    {(product.productType[0] ?? "?").toUpperCase()}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-slate-800">{product.productType}</p>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs tabular-nums text-slate-400">
+                      ID #{product.id} · 创建于 {formatDate(product.createdAt)}
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
+                        起订点 {product.orderMultiple === 1 ? "不限" : product.orderMultiple}
+                      </span>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportedFilter(product.id);
+                    }}
+                    className="text-xs font-medium text-blue-600 hover:underline"
+                  >
+                    历史销量 {importedByProduct[product.id]?.length ?? 0} 条
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startEdit(product.id)}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                  >
+                    <Pencil className="size-3.5" />
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingDelete(product.id)}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-rose-600 transition-colors hover:bg-rose-50"
+                  >
+                    <Trash2 className="size-3.5" />
+                    删除
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
         <Card>
           <div className="border-b border-slate-100 px-5 py-4">
             <h2 className="flex items-center gap-1.5 font-semibold text-slate-900">
@@ -295,17 +455,17 @@ export function ProductsPage() {
 
                 {parsed.entries.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
-                    {[...groupCounts.entries()].map(([name, count]) => (
+                    {[...groupCounts.entries()].map(([productName, count]) => (
                       <span
-                        key={name}
+                        key={productName}
                         className={cn(
                           "rounded-full px-2.5 py-1 text-xs font-medium",
-                          knownSet.has(name)
+                          knownSet.has(productName)
                             ? "bg-blue-50 text-blue-700"
                             : "bg-amber-50 text-amber-700",
                         )}
                       >
-                        {name} × {count}
+                        {productName} × {count}
                       </span>
                     ))}
                   </div>
@@ -322,80 +482,6 @@ export function ProductsPage() {
           </div>
         </Card>
 
-        {/* add product */}
-        <Card className="p-5 sm:p-6">
-          <h2 className="flex items-center gap-2 font-semibold text-slate-900">
-            <PackagePlus className="size-4 text-blue-600" />
-            新增商品
-          </h2>
-          <form onSubmit={handleCreate} className="mt-4 space-y-4">
-            <Field label="商品名称" hint="1-40 个字符，不含空白；之后可补充详细信息">
-              <div className="flex gap-2">
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="例如：夏季T恤"
-                  className="max-w-xs"
-                />
-                <Button type="submit" loading={adding} className="shrink-0">
-                  <Plus className="size-4" />
-                  添加
-                </Button>
-              </div>
-            </Field>
-            {addError && <InlineMessage tone="error">{addError}</InlineMessage>}
-            {addOk && <InlineMessage tone="success">{addOk}</InlineMessage>}
-          </form>
-        </Card>
-
-        {/* product list */}
-        <Card>
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <h2 className="font-semibold text-slate-900">
-              商品列表
-              <span className="ml-2 text-sm font-normal tabular-nums text-slate-400">
-                {products.length} 种
-              </span>
-            </h2>
-          </div>
-          {products.length === 0 && !loading ? (
-            <p className="px-5 py-10 text-center text-sm text-slate-400">
-              还没有商品，用上方表单添加第一个吧
-            </p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {products.map((product) => (
-                <li key={product.productType} className="flex items-center gap-3 px-5 py-3.5">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 font-semibold text-blue-600">
-                    {(product.productType[0] ?? "?").toUpperCase()}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-slate-800">{product.productType}</p>
-                    <p className="text-xs tabular-nums text-slate-400">
-                      创建于 {formatDate(product.createdAt)}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setImportedFilter(product.productType)}
-                    className="text-xs font-medium text-blue-600 hover:underline"
-                  >
-                    历史销量 {importedByProduct[product.productType]?.length ?? 0} 条
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPendingDelete(product.productType)}
-                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-rose-600 transition-colors hover:bg-rose-50"
-                  >
-                    <Trash2 className="size-3.5" />
-                    删除
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-
         {/* imported history management */}
         {importedTotal > 0 && (
           <Card>
@@ -403,18 +489,20 @@ export function ProductsPage() {
               <h2 className="font-semibold text-slate-900">已导入历史销量</h2>
               <div className="flex items-center gap-2">
                 <select
-                  value={importedFilter}
-                  onChange={(e) => setImportedFilter(e.target.value)}
+                  value={importedFilter === null ? "" : String(importedFilter)}
+                  onChange={(e) =>
+                    setImportedFilter(e.target.value === "" ? null : Number(e.target.value))
+                  }
                   className="rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 focus:border-blue-500 focus:outline-none"
                 >
                   <option value="">全部商品</option>
                   {products.map((p) => (
-                    <option key={p.productType} value={p.productType}>
+                    <option key={p.id} value={p.id}>
                       {p.productType}
                     </option>
                   ))}
                 </select>
-                {importedFilter && (
+                {importedFilter !== null && (
                   <button
                     type="button"
                     onClick={() => void clearImportedFilter()}
@@ -442,8 +530,13 @@ export function ProductsPage() {
                   </thead>
                   <tbody>
                     {importedRows.map((entry) => (
-                      <tr key={`${entry.productType}-${entry.id}`} className="border-t border-slate-100 text-slate-600 hover:bg-slate-50">
-                        <td className="px-5 py-2.5 font-medium text-slate-800">{entry.productType}</td>
+                      <tr
+                        key={`${entry.productId}-${entry.id}`}
+                        className="border-t border-slate-100 text-slate-600 hover:bg-slate-50"
+                      >
+                        <td className="px-5 py-2.5 font-medium text-slate-800">
+                          {nameById.get(entry.productId) ?? `#${entry.productId}`}
+                        </td>
                         <td className="px-4 py-2.5 tabular-nums">{formatDate(entry.date)}</td>
                         <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-slate-800">
                           {entry.amount}
@@ -451,7 +544,7 @@ export function ProductsPage() {
                         <td className="px-5 py-2.5 text-right">
                           <button
                             type="button"
-                            onClick={() => void removeImportedRow(entry.productType, entry.id)}
+                            onClick={() => void removeImportedRow(entry.productId, entry.id)}
                             aria-label="删除该条导入"
                             className="rounded-lg p-1 text-slate-300 hover:bg-rose-50 hover:text-rose-600"
                           >
@@ -468,7 +561,53 @@ export function ProductsPage() {
         )}
       </div>
 
-      {pendingDelete && target && (
+      {/* edit attributes dialog */}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <Card className="w-full max-w-sm p-5">
+            <div className="flex items-start justify-between gap-4">
+              <h3 className="text-base font-semibold text-slate-900">编辑商品属性</h3>
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                aria-label="关闭"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="mt-4 space-y-4">
+              <Field label="商品名称" hint="1-40 个字符，不含空白；修改后历史数据保持不变">
+                <Input
+                  value={editing.name}
+                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                />
+              </Field>
+              <Field label="起订点" hint="正整数；1 = 不限制">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  value={editing.multiple}
+                  onChange={(e) => setEditing({ ...editing, multiple: e.target.value })}
+                />
+              </Field>
+              {editingError && <InlineMessage tone="error">{editingError}</InlineMessage>}
+              <div className="flex justify-end gap-2">
+                <Button variant="secondary" onClick={() => setEditing(null)} disabled={editingSaving}>
+                  取消
+                </Button>
+                <Button onClick={() => void saveEdit()} loading={editingSaving}>
+                  保存
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {pendingDelete !== null && target && (
         <ConfirmDialog
           title={`删除商品「${target.productType}」？`}
           confirmLabel="永久删除"

@@ -8,7 +8,7 @@ import {
   nextCycleState,
 } from "../src/modules/stateMachine.js";
 import { ApiError } from "../src/errors.js";
-import { createScope, createUser, mustDefined, scopeFor, truncateAll } from "./helpers.js";
+import { createProduct, createScope, createUser, mustDefined, scopeFor, truncateAll } from "./helpers.js";
 
 // Pure transition, per docs/state.md:
 //   inventory = inventory[-1] + received - sent
@@ -100,10 +100,12 @@ describe("persisted state machine", () => {
     expect(await getState(scope, 99)).toBeNull();
   });
 
-  it("isolates scopes by userId and productType", async () => {
-    const a = scopeFor(await createUser("user-a"), "widget");
-    const b = scopeFor(a.userId, "gadget");
-    const c = scopeFor(await createUser("user-b"), "widget");
+  it("isolates scopes by userId and productId", async () => {
+    const owner = await createUser("user-a");
+    const a = scopeFor(owner, await createProduct(owner, "widget"));
+    const b = scopeFor(owner, await createProduct(owner, "gadget"));
+    const other = await createUser("user-b");
+    const c = scopeFor(other, await createProduct(other, "widget"));
     await advanceCycle(a, { sent: 0, received: 0, sale: 30, purchase: 100 });
     expect(await listStates(a)).toHaveLength(1);
     expect(await listStates(b)).toHaveLength(0);
