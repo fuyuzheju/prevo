@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Calculator,
+  ClipboardPlus,
   DatabaseBackup,
   History,
   PackageOpen,
@@ -14,12 +16,13 @@ import type { SalesPrediction } from "../lib/types.ts";
 import { useProducts } from "../hooks/useProducts.ts";
 import { ProductSidebar } from "../components/ProductSidebar.tsx";
 import { SalesChart } from "../components/SalesChart.tsx";
-import { Card, CenteredSpinner, InlineMessage, cn } from "../components/ui.tsx";
+import { Button, Card, CenteredSpinner, InlineMessage, cn } from "../components/ui.tsx";
 
 const fmtNum = new Intl.NumberFormat("zh-CN");
 
 export function PredictPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
+  const navigate = useNavigate();
   const [selected, setSelected] = useState<number | null>(null);
   const [prediction, setPrediction] = useState<SalesPrediction | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,6 +46,12 @@ export function PredictPage() {
   }, [selected, load]);
 
   const none = !selected;
+
+  // draft a purchase record on the add-record page at the suggested quantity
+  function draftPurchase() {
+    if (selected === null) return;
+    navigate(`/records?productId=${selected}&amount=${prediction?.suggestedAmount ?? 0}`);
+  }
 
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
@@ -142,6 +151,14 @@ export function PredictPage() {
                         : "建议量 = 安全库存 − 当前可用量"
                       : "库存充足，无需采购"
                   }
+                  action={
+                    prediction.suggestedAmount > 0 ? (
+                      <Button onClick={() => draftPurchase()} className="mt-3 w-full">
+                        <ClipboardPlus className="size-4" />
+                        起草采购单
+                      </Button>
+                    ) : undefined
+                  }
                 />
               </div>
             </Card>
@@ -158,12 +175,14 @@ function DecisionTile({
   value,
   hint,
   tone,
+  action,
 }: {
   icon: typeof Wallet;
   label: string;
   value: number;
   hint: string;
   tone: string;
+  action?: ReactNode;
 }) {
   return (
     <div className="px-5 py-5">
@@ -178,6 +197,7 @@ function DecisionTile({
         <PackageOpen className="size-3" />
         {hint}
       </p>
+      {action}
     </div>
   );
 }

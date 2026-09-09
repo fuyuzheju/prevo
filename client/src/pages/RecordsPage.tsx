@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -64,9 +65,12 @@ interface AddedItem {
 
 export function RecordsPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selected, setSelected] = useState<number | null>(null);
   const [records, setRecords] = useState<RecordEntry[]>([]);
   const [recordsError, setRecordsError] = useState<string | null>(null);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  const draftAppliedRef = useRef(false);
 
   const [kind, setKind] = useState<RecordKind>("PURCHASE");
   const [amount, setAmount] = useState("");
@@ -97,7 +101,37 @@ export function RecordsPage() {
     setError(null);
     setAdded([]);
     setAmount("");
+    setDraftNotice(null);
   };
+
+  // The predict page can deep-link here with ?productId=&amount= to draft a
+  // purchase record at the suggested quantity. Applied once per page visit,
+  // then the query params are dropped so a reload does not re-draft.
+  useEffect(() => {
+    if (draftAppliedRef.current || productsLoading || products.length === 0) return;
+    const rawProductId = searchParams.get("productId");
+    const rawAmount = searchParams.get("amount");
+    const productId = Number(rawProductId);
+    const draftAmount = Number(rawAmount);
+    const productExists = products.some((p) => p.id === productId);
+    const amountValid = Number.isSafeInteger(draftAmount) && draftAmount > 0;
+    if (!productExists || !amountValid) {
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    draftAppliedRef.current = true;
+    setSelected(productId);
+    setRecords([]);
+    setRecordsError(null);
+    setError(null);
+    setAdded([]);
+    setKind("PURCHASE");
+    setAmount(String(draftAmount));
+    setDraftNotice(
+      `已按销量预测的采购建议起草一笔购买记录（数量 ${draftAmount}），可修改数量后再添加`,
+    );
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams, products, productsLoading]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -117,6 +151,7 @@ export function RecordsPage() {
       }
       setAdded((prev) => [{ id: Date.now(), kind, amount: value }, ...prev].slice(0, 8));
       setAmount("");
+      setDraftNotice(null);
       await loadRecords(selected);
     } catch (err) {
       setError(api.errorMessage(err));
@@ -203,6 +238,8 @@ export function RecordsPage() {
                 )}
               </div>
             </Card>
+
+            {draftNotice && <InlineMessage tone="info">{draftNotice}</InlineMessage>}
 
             <Card className="p-5 sm:p-6">
               <form onSubmit={handleSubmit} className="space-y-5">
