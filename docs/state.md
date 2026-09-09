@@ -1,12 +1,12 @@
-All core is a state machine based on the product state everyday.
+All core is a state machine based on the product state every cycle.
 State {
-    inventory: number, // inventory until end of the day
-    soldTransit: number, // sold but not sent until end of the day
-    boughtTransit: number, // bought but not received until end of the day
-    sent: number, // all sent during the whole day
-    received: number, // all received during the whole day
-    sale: number, // sale accounts during the whole day
-    purchase: number, // purchase accounts during the whole day
+    inventory: number, // inventory until end of the cycle
+    soldTransit: number, // sold but not sent until end of the cycle
+    boughtTransit: number, // bought but not received until end of the cycle
+    sent: number, // all sent during the whole cycle
+    received: number, // all received during the whole cycle
+    sale: number, // sale accounts during the whole cycle
+    purchase: number, // purchase accounts during the whole cycle
 }
 
 Apparently, 

@@ -1,0 +1,72 @@
+// Prisma schema for prevo server.
+// All state/record amounts are quantities stored as Int (minimum unit 1).
+// No money fields exist yet; if money appears later, store 100x the amount (cents).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  username     String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+  cycleStates  CycleState[]
+  scopeRecords ScopeRecord[]
+  products     Product[]
+}
+
+// One product type (scope dimension) per user. Detailed product fields will
+// be added later.
+model Product {
+  id          Int      @id @default(autoincrement())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      Int
+  productType String
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, productType])
+  @@index([userId])
+}
+
+// One snapshot per (scope, cycle). scope = { userId, productType }.
+model CycleState {
+  id            Int      @id @default(autoincrement())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        Int
+  productType   String
+  cycle         Int
+  inventory     Int
+  soldTransit   Int
+  boughtTransit Int
+  sent          Int
+  received      Int
+  sale          Int
+  purchase      Int
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, productType, cycle])
+  @@index([userId, productType])
+}
+
+// The ledger of a scope. Records are kept forever; a server-side cycle
+// settlement (no client entry point) marks every pending record with the
+// cycle it was folded into, so a record can never be folded twice.
+// kind is one of: PURCHASE | SELL | SEND | RECEIVE
+model ScopeRecord {
+  id          Int      @id @default(autoincrement())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      Int
+  productType String
+  kind        String
+  amount      Int
+  cycle       Int? // null = pending (not folded into any cycle yet)
+  createdAt   DateTime @default(now())
+
+  @@index([userId, productType])
+}
