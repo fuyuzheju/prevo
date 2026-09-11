@@ -1,46 +1,86 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { db } from "../src/db.js";
-import { forecastNext14Days } from "../src/modules/predictor.js";
+import { forecastNext14Days, type ForecastRequest } from "../src/modules/predictor.js";
 import { decidePurchase } from "../src/modules/decision.js";
 import { importSales } from "../src/modules/salesHistory.js";
 import { advanceCycle } from "../src/modules/stateMachine.js";
 import { addLocalDays } from "../../shared/date.ts";
 import { createScope, mustDefined, truncateAll } from "./helpers.js";
 
+function localKeyOf(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+// Builds a request whose last day is today, so `asOfDate` is today and the
+// series is contiguous — exactly what decidePurchase produces.
+function requestFor(totals: readonly number[], skuId = "TEST-SKU"): ForecastRequest {
+  return {
+    skuId,
+    skuName: skuId,
+    asOfDate: localKeyOf(new Date()),
+    dailyTotals: totals.map((total, index) => ({
+      date: localKeyOf(addLocalDays(new Date(), index - (totals.length - 1))),
+      total,
+    })),
+  };
+}
+
 describe("forecastNext14Days", () => {
-  it("predicts 0 without any data", () => {
-    expect(forecastNext14Days([])).toEqual({
+  it("predicts 0 for a SKU with no history", async () => {
+    await expect(forecastNext14Days(requestFor([]))).resolves.toEqual({
       windowDays: 0,
       dailyRate: 0,
       predictedTotal: 0,
-      method: "trailing-average",
+      method: "ALL_ZERO",
     });
   });
 
-  it("uses the trailing 28-day window (including zero-sale days)", () => {
-    const days = Array.from({ length: 40 }, () => ({ total: 10 }));
-    const forecast = forecastNext14Days(days);
+  it("uses a 28-day mean once 28-55 days of history exist", async () => {
+    const forecast = await forecastNext14Days(requestFor(Array.from({ length: 40 }, () => 10)));
     expect(forecast.windowDays).toBe(28);
     expect(forecast.dailyRate).toBeCloseTo(10);
-    expect(forecast.predictedTotal).toBe(140);
+    expect(forecast.predictedTotal).toBeCloseTo(140);
+    expect(forecast.method).toBe("MA_28_FALLBACK");
   });
 
-  it("uses the whole (shorter) history when less than 28 days", () => {
-    const days = Array.from({ length: 7 }, (_, i) => ({ total: i === 0 ? 70 : 0 }));
-    const forecast = forecastNext14Days(days);
+  it("uses the whole history when it is shorter than 28 days", async () => {
+    const forecast = await forecastNext14Days(requestFor([70, 0, 0, 0, 0, 0, 0]));
     expect(forecast.windowDays).toBe(7);
     expect(forecast.dailyRate).toBeCloseTo(10);
-    expect(forecast.predictedTotal).toBe(140);
+    expect(forecast.predictedTotal).toBeCloseTo(140);
+    expect(forecast.method).toBe("FULL_MEAN_FALLBACK");
   });
 
-  it("rounds the predicted total to whole quantities", () => {
-    const days = [
-      { total: 1 },
-      { total: 1 },
-      { total: 1 },
-      { total: 0 }, // rate 0.75 → 10.5 → 11
-    ];
-    expect(forecastNext14Days(days).predictedTotal).toBe(11);
+  it("keeps full precision instead of rounding the predicted total", async () => {
+    // rate 0.75 → 0.75 × 14 = 10.5, deliberately NOT rounded to 11
+    const forecast = await forecastNext14Days(requestFor([1, 1, 1, 0]));
+    expect(forecast.dailyRate).toBeCloseTo(0.75);
+    expect(forecast.predictedTotal).toBeCloseTo(10.5);
+  });
+
+  it("preserves a constant series exactly over the full window", async () => {
+    // Self-normalizing weights: a flat series must come back unchanged.
+    const forecast = await forecastNext14Days(requestFor(Array.from({ length: 90 }, () => 5)));
+    expect(forecast.method).toBe("WMA_84");
+    expect(forecast.windowDays).toBe(84);
+    expect(forecast.dailyRate).toBeCloseTo(5);
+    expect(forecast.predictedTotal).toBeCloseTo(70);
+  });
+
+  it("weights recent days more heavily than old ones", async () => {
+    // Ascending 1..84 across the window: level = Σ(k², k=1..84) / Σ(k, k=1..84).
+    const ascending = Array.from({ length: 84 }, (_, i) => i + 1);
+    const forecast = await forecastNext14Days(requestFor(ascending));
+    const handComputed = 201110 / 3570; // Σk² / Σk for k = 1..84
+    expect(forecast.method).toBe("WMA_84");
+    expect(forecast.dailyRate).toBeCloseTo(handComputed, 9);
+    expect(forecast.predictedTotal).toBeCloseTo(handComputed * 14, 6);
+
+    // The same series reversed must come out strictly lower: that is the whole
+    // point of the weighting, and it fails if the weights are applied backwards.
+    const reversed = [...ascending].reverse();
+    const flipped = await forecastNext14Days(requestFor(reversed));
+    expect(flipped.dailyRate).toBeLessThan(handComputed);
   });
 });
 
@@ -49,12 +89,11 @@ describe("decidePurchase", () => {
 
   it("suggests the gap between safety stock and live available", async () => {
     const scope = await createScope();
-    const today = new Date();
-    const d1 = addLocalDays(today, -1);
-    const d2 = addLocalDays(today, -2);
+    const d1 = addLocalDays(new Date(), -1);
+    const d2 = addLocalDays(new Date(), -2);
     await importSales(scope, [
-      { date: `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, "0")}-${String(d2.getDate()).padStart(2, "0")}`, amount: 20 },
-      { date: `${d1.getFullYear()}-${String(d1.getMonth() + 1).padStart(2, "0")}-${String(d1.getDate()).padStart(2, "0")}`, amount: 20 },
+      { date: localKeyOf(d2), amount: 20 },
+      { date: localKeyOf(d1), amount: 20 },
     ]);
     // pending real order today: sold 10 → live available = -10
     await db.scopeRecord.create({
@@ -62,11 +101,12 @@ describe("decidePurchase", () => {
     });
 
     const decision = await decidePurchase(scope);
-    // window: 3 days (d-2, d-1, today), total 50 → rate 50/3 → ×14 ≈ 233
+    // 3 days of history (d-2, d-1, today), total 50 → full-history mean 50/3
     expect(decision.available).toBe(-10);
-    expect(decision.safetyStock).toBe(233);
+    expect(decision.safetyStock).toBeCloseTo((50 / 3) * 14, 6);
     expect(decision.forecast.windowDays).toBe(3);
-    expect(decision.suggestedAmount).toBe(243); // 233 - (-10)
+    expect(decision.forecast.method).toBe("FULL_MEAN_FALLBACK");
+    expect(decision.suggestedAmount).toBe(244); // ceil(233.33 + 10)
     expect(decision.series).toHaveLength(3);
     expect(mustDefined(decision.series[0], "series day 0").imported).toBe(20);
     expect(mustDefined(decision.series[2], "series last day").real).toBe(10);
@@ -74,9 +114,10 @@ describe("decidePurchase", () => {
 
   it("recommends nothing when available covers the safety stock", async () => {
     const scope = await createScope();
-    // plenty of stock in a settled snapshot, tiny demand
+    // plenty of stock in a settled snapshot, and no sales history at all
     await advanceCycle(scope, { sent: 0, received: 300, sale: 5, purchase: 300 });
     const decision = await decidePurchase(scope);
+    expect(decision.safetyStock).toBe(0);
     expect(decision.available).toBeGreaterThanOrEqual(decision.safetyStock);
     expect(decision.suggestedAmount).toBe(0);
   });
@@ -101,7 +142,7 @@ describe("decidePurchase", () => {
       where: { id: scope.productId },
       data: { orderMultiple: 20 },
     });
-    // series: yesterday 100 (imported) + today 30 (real sell) → window 2 days
+    // series: yesterday 100 (imported) + today 30 (real sell) → 2 days
     await importSales(scope, [{ date: localKeyOf(addLocalDays(new Date(), -1)), amount: 100 }]);
     await db.scopeRecord.create({
       data: { ...scope, kind: "SELL", amount: 30, cycle: null, createdAt: new Date() },
@@ -109,8 +150,8 @@ describe("decidePurchase", () => {
 
     const decision = await decidePurchase(scope);
     expect(decision.orderMultiple).toBe(20);
-    expect(decision.safetyStock).toBe(910); // (100 + 30) / 2 × 14
-    expect(decision.safetyStock - decision.available).toBe(940);
+    expect(decision.safetyStock).toBeCloseTo((130 / 2) * 14, 6); // 910
+    expect(decision.safetyStock - decision.available).toBeCloseTo(940, 6);
     expect(decision.suggestedAmount).toBe(940); // already a multiple of 20
   });
 
@@ -120,9 +161,10 @@ describe("decidePurchase", () => {
       where: { id: scope.productId },
       data: { orderMultiple: 10 },
     });
-    // raw need = 7 → rounds up to 10
+    // 2 days (yesterday 1, today 0) → mean 0.5 → 14d total 7, rounded up to 10
     await importSales(scope, [{ date: localKeyOf(addLocalDays(new Date(), -1)), amount: 1 }]);
     const decision = await decidePurchase(scope);
+    expect(decision.safetyStock).toBeCloseTo(7, 6);
     expect(decision.suggestedAmount).toBe(10);
     expect(decision.suggestedAmount % 10).toBe(0);
 
@@ -139,7 +181,3 @@ describe("decidePurchase", () => {
     expect(none.suggestedAmount).toBe(0);
   });
 });
-
-function localKeyOf(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}

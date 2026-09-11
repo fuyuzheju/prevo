@@ -35,12 +35,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 流水四类记录 `PURCHASE/SELL/SEND/RECEIVE` 是 ledger,**永不删除**;`ScopeRecord.cycle` 为 null = 本周期未结算,非空 = 已并入第 N 周期(防重复折叠)
 - 结算(summarize/settlePending*)把未结算记录按 kind 汇总为周期四输入 sale/purchase/sent/received 并推进一周期,随后把记录标上 cycle;空周期不产生快照。**客户端没有结算入口**,由 `settlement.ts` 每日定时(环境变量 SETTLE_TIME,默认 00:05,服务器本地时区)按**记录本地日期**逐日结算;停机错过会按日期分组补算。
 - 历史销量导入(`ImportedSale`)是 prediction-only 数据集:不进状态机/流水/实时库存;真实 SELL 记录自动并入预测。
-- 预测:安全库存 = 下两周预测总销量 = 近 28 天(含零销日,不足则从最早日起)日均 ×14;采购建议 = max(0, 安全库存 − available)。模型集中在 predictor.ts,替换只动它。
+- 预测:**已跨进程边界**——算法是 Python(WMA84:取 `as_of_date` 往前 84 个连续自然日的日销量线性加权,最近一天权重最大;历史不足走冷启动降级阶梯 `FULL_MEAN_FALLBACK`/`MA_28_FALLBACK`/`MA_56_FALLBACK`,全零走 `ALL_ZERO`),安全库存 = 两周预测总量 = 日均水平 ×14;采购建议 = max(0, 安全库存 − available)。
+  - 算法在 `server/python/predict_core.py`(自包含,只依赖 numpy/pandas),**替换模型就是替换这个文件**;stdin/stdout 契约在 `server/python/main.py`;`server/src/modules/predictor.ts` 只做子进程传输,不含模型逻辑。
+  - 解释器由 `PREDICTOR_PYTHON` 指定(该解释器必须能 import numpy/pandas——裸 `python` 可能是 pandas 已损坏的 conda base 环境);`main.py` 自带自检:`<python> server/python/predict_core.py`。
 - "实时位置"(当前库存/可用量) = 最新已结算快照 + 未结算流水推算,算法在 `shared/model.ts` 的 `applyPendingToPosition/availableOf`,client(查询页)与 server(decision)共用同一实现,别各写一份。
 
 ## server 结构要点
 
 - 模块分层(对应 docs/struc.md):modules/ 下 stateMachine(纯公式+持久化)、stateSummary(ledger+settle 原语)、products、userSystem(JWT+bcrypt)、settlement(定时)、predictor/decision/salesHistory(预测决策)、webApi(路由+守卫);`app.ts` 组装、`index.ts` 启动并注册定时器。
+- `python/` 与 `src/` 同级:预测模型的 Python 实现,不参与 tsc/vitest 构建。`predict_core.py` 是 vendored 的算法,`main.py` 是 I/O 适配层。
 - 路由:scope 路由形如 `/api/products/:productType/{state,states,records,purchase,sell,send,receive,summarize,predict,sales/import}`;集合路由 `/api/products`(列表/建/删)、`/api/sales/import`(多商品批量,独立 salesRouter);**除 register/login 外全要 Bearer token**;scope 操作先 `requireProduct`(商品不存在 → 404 PRODUCT_NOT_FOUND)。
 - Prisma 7 注意:generator `provider="prisma-client"` 输出到 `server/generated/prisma`,源码用 `import ... from "../generated/prisma/client.js"`(.js 后缀是 nodenext 映射到 .ts);datasource url 在 `prisma.config.ts`(DATABASE_URL);相对 `file:` 路径以**项目根**为基准 → dev.db 在 server/dev.db,与运行时代码解析一致。
 - SQLite 不强制 FK → `removeUser`/`removeProduct` 都是**显式逐表删除**(scopeRecord→cycleState→importedSale→product→user);schema 加了表记得补。
