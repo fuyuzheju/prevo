@@ -206,7 +206,10 @@ export async function buildDailySalesSeries(
 
   const todayStart = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
   const series: SalesDay[] = [];
-  for (let day = earliest; day <= todayStart; day = addLocalDays(day, 1)) {
+  // Start from local midnight of the earliest day: a real order carries a full
+  // timestamp, and comparing that against today's midnight would drop the whole
+  // range whenever every record happens to be from today.
+  for (let day = addLocalDays(earliest, 0); day <= todayStart; day = addLocalDays(day, 1)) {
     const key = localDateKey(day);
     series.push(byKey.get(key) ?? { date: key, real: 0, imported: 0, sale: 0 });
   }

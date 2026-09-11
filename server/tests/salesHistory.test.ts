@@ -92,6 +92,18 @@ describe("buildDailySalesSeries", () => {
     expect(series.reduce((sum, day) => sum + day.sale, 0)).toBe(42);
   });
 
+  it("still spans today when the only sale happened today", async () => {
+    const scope = await createScope();
+    // A real order carries a full timestamp, not a midnight. Comparing that
+    // timestamp against today's midnight must not push the whole series out of
+    // range, or a brand-new product looks like it has no data at all.
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 12, cycle: null, createdAt: new Date() },
+    });
+    const series = await buildDailySalesSeries(scope);
+    expect(series).toEqual([{ date: daysAgo(0), real: 12, imported: 0, sale: 12 }]);
+  });
+
   it("returns an empty series without any data and isolates scopes", async () => {
     const scope = await createScope();
     expect(await buildDailySalesSeries(scope)).toEqual([]);
