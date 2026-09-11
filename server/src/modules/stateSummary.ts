@@ -2,12 +2,12 @@ import { db } from "../db.js";
 import { ApiError } from "../errors.js";
 import { advanceCycle } from "./stateMachine.js";
 import {
-  isQuantity,
   isRecordKind,
   type CycleInput,
   type RecordKind,
   type Scope,
 } from "../../../shared/model.ts";
+import { isQuantity } from "../../../shared/quantity.ts";
 import { addLocalDays } from "../../../shared/date.ts";
 import type { Prisma } from "../../generated/prisma/client.js";
 
@@ -32,17 +32,19 @@ export async function addRecord(
   client: SummaryDb = db,
 ): Promise<void> {
   if (!isQuantity(amount)) {
-    throw new ApiError(400, "INVALID_AMOUNT", "amount must be a positive integer");
+    throw new ApiError(400, "INVALID_AMOUNT", "amount must be an integer number of 1/1000 units");
   }
   await client.scopeRecord.create({ data: { ...scopeWhere(scope), kind, amount } });
 }
 
 
 // purchase returns false instead of throwing on an invalid amount, so the
-// caller can react to a rejected purchase bill.
+// caller can react to a rejected purchase bill. The raw body value is passed
+// through as unknown because 0 is valid now, so "invalid" can no longer be
+// represented by a sentinel amount.
 export async function purchase(
   scope: Scope,
-  amount: number,
+  amount: unknown,
   client: SummaryDb = db,
 ): Promise<boolean> {
   if (!isQuantity(amount)) return false;

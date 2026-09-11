@@ -16,6 +16,7 @@ import {
   createScope,
   createUser,
   mustDefined,
+  q,
   scopeFor,
   truncateAll,
 } from "./helpers.js";
@@ -41,19 +42,27 @@ describe("records within a cycle", () => {
 
   it("purchase returns false for an invalid amount instead of throwing", async () => {
     const scope = await createScope();
-    expect(await purchase(scope, 0)).toBe(false);
-    expect(await purchase(scope, -5)).toBe(false);
     expect(await purchase(scope, 1.5)).toBe(false);
+    expect(await purchase(scope, "5")).toBe(false);
     expect(await db.scopeRecord.count()).toBe(0);
   });
 
-  it("sell/send/receive throw on invalid amounts", async () => {
+  it("purchase accepts zero and negative amounts", async () => {
+    const scope = await createScope();
+    expect(await purchase(scope, 0)).toBe(true);
+    expect(await purchase(scope, -q(0.5))).toBe(true);
+    const records = await db.scopeRecord.findMany({ orderBy: { id: "asc" } });
+    expect(records.map((r) => r.amount)).toEqual([0, -500]);
+  });
+
+  it("sell/send/receive accept zero and negative amounts, reject non-integers", async () => {
     const scope = await createScope();
     for (const op of [sell, send, receive]) {
-      await expect(op(scope, 0)).rejects.toBeInstanceOf(ApiError);
-      await expect(op(scope, -1)).rejects.toBeInstanceOf(ApiError);
+      await op(scope, 0);
+      await op(scope, -q(1.5));
+      await expect(op(scope, 0.5)).rejects.toBeInstanceOf(ApiError);
     }
-    expect(await db.scopeRecord.count()).toBe(0);
+    expect(await db.scopeRecord.count()).toBe(6);
   });
 });
 
@@ -85,6 +94,60 @@ describe("settlement (folding pending records into a cycle)", () => {
     expect(rows).toHaveLength(5); // 2 purchase + sell + send + receive
     for (const row of rows) expect(row.cycle).toBe(1);
     expect((await listStates(scope))[0]).toEqual(snapshot);
+  });
+
+  it("folds decimal and return (negative) records with the same linear formulas", async () => {
+    const scope = await createScope();
+    await purchase(scope, q(10));
+    await receive(scope, q(10));
+    await sell(scope, q(4.5));
+    await sell(scope, -q(0.5)); // half a unit returned
+    await send(scope, q(4));
+
+    expect(await settleAll(scope)).toBe(1);
+    const snapshot = await getLatestState(scope);
+    expect(snapshot).toEqual({
+      cycle: 1,
+      inventory: q(6),
+      soldTransit: 0,
+      boughtTransit: 0,
+      sent: q(4),
+      received: q(10),
+      sale: q(4),
+      purchase: q(10),
+    });
+  });
+
+  it("reverses an already-received purchase with a negative purchase + receive pair", async () => {
+    const scope = await createScope();
+    await purchase(scope, q(10));
+    await receive(scope, q(10));
+    await settleAll(scope);
+
+    await receive(scope, -q(3)); // three units go back to the supplier
+    await purchase(scope, -q(3));
+    expect(await settleAll(scope)).toBe(1);
+    const snapshot = await getLatestState(scope);
+    expect(snapshot?.inventory).toBe(q(7));
+    expect(snapshot?.boughtTransit).toBe(0);
+    expect(snapshot?.soldTransit).toBe(0);
+  });
+
+  it("settles a zero-amount record without changing the state", async () => {
+    const scope = await createScope();
+    await purchase(scope, 0);
+    expect(await settleAll(scope)).toBe(1);
+    const snapshot = await getLatestState(scope);
+    expect(snapshot).toEqual({
+      cycle: 1,
+      inventory: 0,
+      soldTransit: 0,
+      boughtTransit: 0,
+      sent: 0,
+      received: 0,
+      sale: 0,
+      purchase: 0,
+    });
   });
 
   it("keeps accumulating into the next cycle after a settlement", async () => {

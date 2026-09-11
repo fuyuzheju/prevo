@@ -5,7 +5,7 @@ import { decidePurchase } from "../src/modules/decision.js";
 import { importSales } from "../src/modules/salesHistory.js";
 import { advanceCycle } from "../src/modules/stateMachine.js";
 import { addLocalDays } from "../../shared/date.ts";
-import { createScope, mustDefined, truncateAll } from "./helpers.js";
+import { createScope, mustDefined, q, truncateAll } from "./helpers.js";
 
 describe("forecastNext14Days", () => {
   it("predicts 0 without any data", () => {
@@ -41,6 +41,12 @@ describe("forecastNext14Days", () => {
       { total: 0 }, // rate 0.75 → 10.5 → 11
     ];
     expect(forecastNext14Days(days).predictedTotal).toBe(11);
+  });
+
+  it("treats a return day (negative total) as negative sales", () => {
+    const forecast = forecastNext14Days([{ total: q(20) }, { total: -q(10) }]);
+    expect(forecast.dailyRate).toBeCloseTo(q(5));
+    expect(forecast.predictedTotal).toBe(q(70));
   });
 });
 

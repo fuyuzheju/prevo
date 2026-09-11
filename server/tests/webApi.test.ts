@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { Server } from "node:http";
 import { createApp } from "../src/app.js";
 import { settlePendingBefore } from "../src/modules/stateSummary.js";
-import { truncateAll } from "./helpers.js";
+import { q, truncateAll } from "./helpers.js";
 
 let server: Server;
 let base: string;
@@ -278,13 +278,13 @@ describe("product cycle flow over HTTP", () => {
     expect(purchase.json.ok).toBe(true);
     const invalidPurchase = await call("POST", u("/purchase"), {
       token,
-      body: { amount: -5 },
+      body: { amount: 1.5 },
     });
     expect(invalidPurchase.json.ok).toBe(false);
     await call("POST", u("/sell"), { token, body: { amount: 30 } });
     await call("POST", u("/receive"), { token, body: { amount: 60 } });
     await call("POST", u("/send"), { token, body: { amount: 20 } });
-    const invalidSell = await call("POST", u("/sell"), { token, body: { amount: 0 } });
+    const invalidSell = await call("POST", u("/sell"), { token, body: { amount: 0.5 } });
     expect(invalidSell.status).toBe(400);
     expect(invalidSell.json.error.code).toBe("INVALID_AMOUNT");
 
@@ -337,6 +337,46 @@ describe("product cycle flow over HTTP", () => {
     await settleNow(userId, productId);
     const after = await call("GET", u("/states"), { token });
     expect(after.json.states).toHaveLength(2);
+  });
+
+  it("accepts decimal, zero and negative amounts and keeps everything fixed-point", async () => {
+    const { token, userId, productId } = await loginWithProduct("alice", "widget");
+    const u = (suffix = "") => productUrl(productId, suffix);
+
+    // 10 bought and received, 4.5 sold, 0.5 of that returned, one zero no-op
+    await call("POST", u("/purchase"), { token, body: { amount: q(10) } });
+    await call("POST", u("/receive"), { token, body: { amount: q(10) } });
+    await call("POST", u("/sell"), { token, body: { amount: q(4.5) } });
+    await call("POST", u("/sell"), { token, body: { amount: -q(0.5) } });
+    await call("POST", u("/sell"), { token, body: { amount: 0 } });
+
+    const records = await call("GET", u("/records"), { token });
+    expect(records.json.records.map((r: { amount: number }) => r.amount)).toEqual([
+      0,
+      -q(0.5),
+      q(4.5),
+      q(10),
+      q(10),
+    ]);
+
+    await settleNow(userId, productId);
+    const state = await call("GET", u("/state"), { token });
+    expectState(state.json.state, {
+      cycle: 1,
+      inventory: q(10),
+      soldTransit: q(4),
+      boughtTransit: 0,
+      sent: 0,
+      received: q(10),
+      sale: q(4),
+      purchase: q(10),
+    });
+
+    const predict = await call("GET", u("/predict"), { token });
+    expect(predict.json.available).toBe(q(6));
+    expect(predict.json.safetyStock).toBe(q(56)); // 4 sold in one day × 14
+    expect(predict.json.suggestedAmount).toBe(q(50)); // 56 − 6
+    expect(predict.json.forecast.dailyRate).toBe(q(4));
   });
 
   it("isolates scopes between products and users", async () => {

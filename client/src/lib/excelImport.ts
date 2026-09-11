@@ -4,6 +4,7 @@
 // when the user actually picks a file.
 
 import { isFutureDateKey } from "../../../shared/date.ts";
+import { parseQuantity } from "../../../shared/quantity.ts";
 
 export interface ImportSalesRow {
   productType: string;
@@ -14,6 +15,8 @@ export interface ImportSalesRow {
 export interface ParsedSalesSheet {
   entries: ImportSalesRow[];
   errors: string[];
+  // Non-blocking notes (e.g. rows with amount 0); they never prevent import.
+  warnings: string[];
 }
 
 // minimal structural view of xlsx (CJS interop differs between bundlers and
@@ -76,16 +79,12 @@ function normalizeDateKey(value: unknown): string | null {
   return valid ? key : null;
 }
 
+// A cell may hold a number, a formatted string ("1,200", "0.5", "-2"), null
+// (defval) or something else entirely; parseQuantity handles every accepted
+// shape and returns null for the rest.
 function normalizeAmount(value: unknown): number | null {
-  let raw: unknown = value;
-  if (typeof raw === "string") {
-    const cleaned = raw.replace(/,/g, "").trim();
-    if (cleaned === "") return null;
-    raw = Number(cleaned);
-  }
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
-  if (!Number.isSafeInteger(raw) || raw <= 0) return null;
-  return raw;
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  return parseQuantity(value);
 }
 
 function isBlank(row: unknown[]): boolean {
@@ -139,16 +138,16 @@ export async function parseSalesSheetBytes(bytes: ArrayBuffer | Uint8Array): Pro
   const candidate =
     typeof mod === "object" && mod !== null && "default" in mod ? mod.default : mod;
   if (!isSheetLib(candidate)) {
-    return { entries: [], errors: ["无法读取该文件，请确认为 .xlsx / .xls / .csv 格式"] };
+    return { entries: [], errors: ["无法读取该文件，请确认为 .xlsx / .xls / .csv 格式"], warnings: [] };
   }
   const lib: SheetLib = candidate;
   let rows: unknown[][];
   try {
     const workbook = lib.read(bytes, { type: "array" });
     const sheetName = workbook.SheetNames[0];
-    if (!sheetName) return { entries: [], errors: ["文件里没有工作表"] };
+    if (!sheetName) return { entries: [], errors: ["文件里没有工作表"], warnings: [] };
     const sheet = workbook.Sheets[sheetName];
-    if (sheet === undefined) return { entries: [], errors: ["文件里没有工作表"] };
+    if (sheet === undefined) return { entries: [], errors: ["文件里没有工作表"], warnings: [] };
     // raw:false reads the *formatted* cell text — dates come back exactly as
     // they are displayed in the spreadsheet, so no timezone shifting applies.
     rows = lib.utils.sheet_to_json(sheet, {
@@ -157,19 +156,21 @@ export async function parseSalesSheetBytes(bytes: ArrayBuffer | Uint8Array): Pro
       defval: null,
     });
   } catch {
-    return { entries: [], errors: ["无法读取该文件，请确认为 .xlsx / .xls / .csv 格式"] };
+    return { entries: [], errors: ["无法读取该文件，请确认为 .xlsx / .xls / .csv 格式"], warnings: [] };
   }
   if (rows.length === 0) {
-    return { entries: [], errors: ["文件中没有可读取的行"] };
+    return { entries: [], errors: ["文件中没有可读取的行"], warnings: [] };
   }
 
   const { productCol, dateCol, amountCol, headerRows } = detectLayout(rows);
   const dataRows = rows.slice(headerRows);
   if (dataRows.length === 0 || dataRows.every(isBlank)) {
-    return { entries: [], errors: ["文件中没有可读取的数据行"] };
+    return { entries: [], errors: ["文件中没有可读取的数据行"], warnings: [] };
   }
   const entries: ImportSalesRow[] = [];
   const errors: string[] = [];
+  const warnings: string[] = [];
+  let zeroRows = 0;
 
   dataRows.forEach((row, offset) => {
     const rowIndex = headerRows + offset + 1; // 1-based, as displayed
@@ -190,13 +191,17 @@ export async function parseSalesSheetBytes(bytes: ArrayBuffer | Uint8Array): Pro
       return;
     }
     if (amount === null) {
-      errors.push(`第 ${rowIndex} 行:数量无效（应为正整数）`);
+      errors.push(`第 ${rowIndex} 行:数量无效（应为数字，最多 3 位小数，可负数）`);
       return;
     }
+    if (amount === 0) zeroRows++;
     entries.push({ productType: product, date: dateKey, amount });
   });
+  if (zeroRows > 0) {
+    warnings.push(`其中 ${zeroRows} 行数量为 0，不影响预测结果`);
+  }
 
-  return { entries, errors };
+  return { entries, errors, warnings };
 }
 
 function normalizeProduct(value: unknown): string | null {

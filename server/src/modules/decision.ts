@@ -22,8 +22,10 @@ export interface PurchaseDecision {
   forecast: TwoWeekForecast;
 }
 
-// Purchases must be multiples of the product's order multiple, so the raw
-// suggestion is rounded UP to the nearest multiple (0 stays 0).
+// Purchases must be multiples of the product's order multiple, so a positive
+// need is rounded UP to the nearest multiple; nothing is bought when the need
+// is already covered (raw ≤ 0, including a negative available position that
+// the safety stock still absorbs).
 function roundUpToMultiple(raw: number, orderMultiple: number): number {
   if (raw <= 0) return 0;
   return Math.ceil(raw / orderMultiple) * orderMultiple;

@@ -6,7 +6,9 @@ export interface ProductsState {
   products: ProductItem[];
   loading: boolean;
   error: string | null;
-  reload: () => Promise<void>;
+  // Resolves to the freshly loaded list (empty on failure) so callers can act
+  // on products created after their last render.
+  reload: () => Promise<ProductItem[]>;
 }
 
 export function useProducts(): ProductsState {
@@ -14,13 +16,16 @@ export function useProducts(): ProductsState {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (): Promise<ProductItem[]> => {
     setLoading(true);
     setError(null);
     try {
-      setProducts(await api.listProducts());
+      const items = await api.listProducts();
+      setProducts(items);
+      return items;
     } catch (err) {
       setError(api.errorMessage(err));
+      return [];
     } finally {
       setLoading(false);
     }

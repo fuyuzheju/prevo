@@ -1,5 +1,8 @@
 // Prisma schema for prevo server.
-// All state/record amounts are quantities stored as Int (minimum unit 1).
+// All state/record amounts are fixed-point quantities stored as Int: integer
+// numbers of 1/1000 units (QUANTITY_SCALE in shared/quantity.ts). They are
+// signed — a negative amount reverses the flow of its record kind and 0 is a
+// no-op — so keep every amount column Int, never Float.
 // No money fields exist yet; if money appears later, store 100x the amount (cents).
 
 generator client {
@@ -31,7 +34,7 @@ model ImportedSale {
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   productId Int
   date      DateTime // local midnight, only the date part matters
-  amount    Int      // total sales of that day
+  amount    Int      // total sales of that day (1/1000 units; negative = returns)
   createdAt DateTime @default(now())
 
   @@index([productId])
@@ -44,7 +47,7 @@ model Product {
   user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId        Int
   productType   String
-  orderMultiple Int           @default(1) // purchase qty must be a multiple; 1 = no constraint
+  orderMultiple Int           @default(1) // purchase qty must be a multiple of this (1/1000 units); 1 = no constraint
   createdAt     DateTime      @default(now())
   cycleStates   CycleState[]
   scopeRecords  ScopeRecord[]
@@ -86,7 +89,7 @@ model ScopeRecord {
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   productId Int
   kind      String
-  amount    Int
+  amount    Int // 1/1000 units, signed (negative = reversal/return, 0 = no-op)
   cycle     Int? // null = pending (not folded into any cycle yet)
   createdAt DateTime @default(now())
 

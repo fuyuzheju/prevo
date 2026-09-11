@@ -1,6 +1,7 @@
 import { db, type DbClient } from "../db.js";
 import { ApiError } from "../errors.js";
-import { isQuantity, isValidProductName, type Scope } from "../../../shared/model.ts";
+import { isValidProductName, type Scope } from "../../../shared/model.ts";
+import { isQuantity } from "../../../shared/quantity.ts";
 import {
   addLocalDays,
   isFutureDateKey,
@@ -67,7 +68,7 @@ function assertRows(entries: unknown): { date: string; amount: number; productTy
       throw new ApiError(400, "INVALID_DATE", `date "${key}" is in the future`);
     }
     if (!isQuantity(amountRaw)) {
-      throw new ApiError(400, "INVALID_AMOUNT", "amount must be a positive integer");
+      throw new ApiError(400, "INVALID_AMOUNT", "amount must be an integer number of 1/1000 units");
     }
     return { productType, date: key, amount: amountRaw };
   });

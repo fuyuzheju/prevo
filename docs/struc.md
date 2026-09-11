@@ -16,7 +16,7 @@ This file describes the structure of the project.
 
 1. State summary
     - dependencies: state machine
-    - API: 
+    - API: (every amount is a signed fixed-point integer in 1/1000 units)
         - purchase(amount: number) => boolean, add a purchase bill to the current state, and be settled later
         - sell(amount: number) => undefined, add a sell bill
         - send(amount: number) => undefined, add a send record

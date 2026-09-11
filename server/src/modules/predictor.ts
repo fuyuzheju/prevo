@@ -6,7 +6,8 @@
 // the NEXT TWO WEEKS. We estimate the recent daily run-rate as the average
 // daily sales over the trailing 28 calendar days (or since the first data
 // day when history is shorter), including days without sales, then scale it
-// to 14 days.
+// to 14 days. Amounts are signed fixed-point quantities, so a return day
+// counts as negative sales and lowers the rate.
 
 const WINDOW_DAYS = 28;
 const HORIZON_DAYS = 14;
@@ -28,7 +29,7 @@ export function forecastNext14Days(dailyTotals: readonly { total: number }[]): T
   if (windowDays === 0) {
     return { windowDays: 0, dailyRate: 0, predictedTotal: 0, method: FORECAST_METHOD };
   }
-  const total = window.reduce((sum, day) => sum + Math.max(0, day.total), 0);
+  const total = window.reduce((sum, day) => sum + day.total, 0);
   const dailyRate = total / windowDays;
   const predictedTotal = Math.round(dailyRate * HORIZON_DAYS);
   return { windowDays, dailyRate, predictedTotal, method: FORECAST_METHOD };

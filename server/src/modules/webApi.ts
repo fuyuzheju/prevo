@@ -1,7 +1,8 @@
 import { Router, type Request, type RequestHandler } from "express";
 import { db } from "../db.js";
 import { ApiError } from "../errors.js";
-import { isQuantity, type Scope } from "../../../shared/model.ts";
+import type { Scope } from "../../../shared/model.ts";
+import { isQuantity } from "../../../shared/quantity.ts";
 import * as userSystem from "./userSystem.js";
 import * as stateMachine from "./stateMachine.js";
 import * as stateSummary from "./stateSummary.js";
@@ -87,7 +88,7 @@ function productScopeOf(req: Request): Scope {
 function amountOf(req: Request): number {
   const amount = bodyValue(req, "amount");
   if (!isQuantity(amount)) {
-    throw new ApiError(400, "INVALID_AMOUNT", "amount must be a positive integer");
+    throw new ApiError(400, "INVALID_AMOUNT", "amount must be an integer number of 1/1000 units");
   }
   return amount;
 }
@@ -217,8 +218,7 @@ productsRouter.delete("/:productId/sales/import", async (req, res) => {
 productsRouter.post("/:productId/purchase", async (req, res) => {
   await requireProduct(req);
   const scope = productScopeOf(req);
-  const amount = bodyValue(req, "amount");
-  const ok = await stateSummary.purchase(scope, isQuantity(amount) ? amount : 0);
+  const ok = await stateSummary.purchase(scope, bodyValue(req, "amount"));
   res.json({ ok });
 });
 

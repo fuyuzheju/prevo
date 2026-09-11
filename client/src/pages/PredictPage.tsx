@@ -12,6 +12,7 @@ import {
   Wallet,
 } from "lucide-react";
 import * as api from "../lib/api.ts";
+import { formatQuantity, QUANTITY_SCALE } from "../../../shared/quantity.ts";
 import type { SalesPrediction } from "../lib/types.ts";
 import { useProducts } from "../hooks/useProducts.ts";
 import { ProductSidebar } from "../components/ProductSidebar.tsx";
@@ -121,7 +122,7 @@ export function PredictPage() {
                 </h2>
                 <span className="text-xs text-slate-400">
                   预测：近 {prediction.forecast.windowDays} 天日均
-                  {fmtNum.format(prediction.forecast.dailyRate)} × 14 天
+                  {fmtNum.format(prediction.forecast.dailyRate / QUANTITY_SCALE)} × 14 天
                 </span>
               </div>
               <div className="grid divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
@@ -129,25 +130,25 @@ export function PredictPage() {
                   icon={Wallet}
                   label="当前可用量"
                   tone="text-slate-900"
-                  value={prediction.available}
+                  value={formatQuantity(prediction.available)}
                   hint="库存 + 在途 − 已售未发"
                 />
                 <DecisionTile
                   icon={DatabaseBackup}
                   label="安全库存"
                   tone="text-blue-600"
-                  value={prediction.safetyStock}
+                  value={formatQuantity(prediction.safetyStock)}
                   hint="预测下两周总销量"
                 />
                 <DecisionTile
                   icon={ShoppingCart}
                   label="采购建议"
                   tone={prediction.suggestedAmount > 0 ? "text-emerald-600" : "text-slate-400"}
-                  value={prediction.suggestedAmount}
+                  value={formatQuantity(prediction.suggestedAmount)}
                   hint={
                     prediction.suggestedAmount > 0
                       ? prediction.orderMultiple > 1
-                        ? `已按起订点 ${prediction.orderMultiple} 向上取整（安全库存 − 可用量的整数倍）`
+                        ? `已按起订点 ${formatQuantity(prediction.orderMultiple)} 向上取整（安全库存 − 可用量的倍数）`
                         : "建议量 = 安全库存 − 当前可用量"
                       : "库存充足，无需采购"
                   }
@@ -179,7 +180,7 @@ function DecisionTile({
 }: {
   icon: typeof Wallet;
   label: string;
-  value: number;
+  value: string;
   hint: string;
   tone: string;
   action?: ReactNode;
@@ -190,9 +191,7 @@ function DecisionTile({
         <Icon className="size-4 text-blue-500" />
         {label}
       </p>
-      <p className={cn("mt-2 text-4xl font-bold tabular-nums tracking-tight", tone)}>
-        {fmtNum.format(value)}
-      </p>
+      <p className={cn("mt-2 text-4xl font-bold tabular-nums tracking-tight", tone)}>{value}</p>
       <p className="mt-2 flex items-center gap-1 text-xs text-slate-400">
         <PackageOpen className="size-3" />
         {hint}

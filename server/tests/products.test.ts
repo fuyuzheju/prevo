@@ -61,7 +61,12 @@ describe("products", () => {
       productType: "tee",
       orderMultiple: 5,
     });
-    for (const bad of [0, -2, 1.5, "10", null]) {
+    // a sub-unit multiple (0.5 = 500 in fixed point) is allowed too
+    await expect(createProduct(userId, "shirt", 500)).resolves.toMatchObject({
+      productType: "shirt",
+      orderMultiple: 500,
+    });
+    for (const bad of [0, -2, 1.5, 0.5, "10", null]) {
       await expect(createProduct(userId, "bad", bad)).rejects.toMatchObject({
         status: 400,
         code: "INVALID_ORDER_MULTIPLE",

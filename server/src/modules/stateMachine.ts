@@ -101,8 +101,12 @@ export async function advanceCycle(
   client: StateClient = db,
 ): Promise<StateSnapshot> {
   for (const [key, value] of Object.entries(input)) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new ApiError(400, "INVALID_CYCLE_INPUT", `cycle input "${key}" must be a non-negative integer`);
+    if (!Number.isSafeInteger(value)) {
+      throw new ApiError(
+        400,
+        "INVALID_CYCLE_INPUT",
+        `cycle input "${key}" must be an integer number of 1/1000 units`,
+      );
     }
   }
   const latest = await getLatestState(scope, client);

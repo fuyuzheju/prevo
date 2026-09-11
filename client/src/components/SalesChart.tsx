@@ -8,6 +8,7 @@ import {
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { SalesDay } from "../lib/types.ts";
+import { formatQuantity } from "../../../shared/quantity.ts";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer]);
 
@@ -39,7 +40,9 @@ export function SalesChart({ series, height = 320 }: { series: readonly SalesDay
       grid: { left: 12, right: 16, top: 24, bottom: 8, containLabel: true },
       tooltip: {
         trigger: "axis",
-        valueFormatter: (value: unknown) => String(value),
+        // values are fixed-point quantities; show the user-facing decimal
+        valueFormatter: (value: unknown) =>
+          typeof value === "number" ? formatQuantity(value) : String(value),
       },
       xAxis: {
         type: "category",
@@ -51,7 +54,11 @@ export function SalesChart({ series, height = 320 }: { series: readonly SalesDay
       yAxis: {
         type: "value",
         minInterval: 1,
-        axisLabel: { color: "#94a3b8", fontSize: 11 },
+        axisLabel: {
+          color: "#94a3b8",
+          fontSize: 11,
+          formatter: (value: number) => formatQuantity(value),
+        },
         splitLine: { lineStyle: { color: "#f1f5f9" } },
       },
       dataZoom: [

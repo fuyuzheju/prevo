@@ -24,9 +24,15 @@ const PRODUCT_SELECT = {
   createdAt: true,
 } satisfies Prisma.ProductSelect;
 
+// A fixed-point quantity as well (1/1000 units); 1 is the smallest value and
+// doubles as "no constraint" when the suggestion is rounded to it.
 function assertOrderMultiple(orderMultiple: unknown): number {
   if (typeof orderMultiple !== "number" || !Number.isSafeInteger(orderMultiple) || orderMultiple < 1) {
-    throw new ApiError(400, "INVALID_ORDER_MULTIPLE", "orderMultiple must be a positive integer");
+    throw new ApiError(
+      400,
+      "INVALID_ORDER_MULTIPLE",
+      "orderMultiple must be a positive integer number of 1/1000 units",
+    );
   }
   return orderMultiple;
 }
