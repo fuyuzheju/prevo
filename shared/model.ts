@@ -22,7 +22,7 @@ export interface StateSnapshot {
   purchase: number; // all bought during the cycle
 }
 
-// The four whole-cycle aggregates fed into the state machine at summarize().
+// The four whole-cycle aggregates fed into the state machine at settlement.
 export interface CycleInput {
   sent: number;
   received: number;

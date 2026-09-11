@@ -3,6 +3,8 @@
 // xlsx is loaded lazily (dynamic import) so the heavy library only loads
 // when the user actually picks a file.
 
+import { isFutureDateKey } from "../../../shared/date.ts";
+
 export interface ImportSalesRow {
   productType: string;
   date: string;
@@ -181,6 +183,10 @@ export async function parseSalesSheetBytes(bytes: ArrayBuffer | Uint8Array): Pro
     }
     if (!dateKey) {
       errors.push(`第 ${rowIndex} 行:日期无效（应为 YYYY-MM-DD 或 Excel 日期）`);
+      return;
+    }
+    if (isFutureDateKey(dateKey)) {
+      errors.push(`第 ${rowIndex} 行:日期 ${dateKey} 在未来，请修正`);
       return;
     }
     if (amount === null) {

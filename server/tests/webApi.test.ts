@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import type { Server } from "node:http";
 import { createApp } from "../src/app.js";
+import { settlePendingBefore } from "../src/modules/stateSummary.js";
 import { truncateAll } from "./helpers.js";
 
 let server: Server;
@@ -46,21 +47,30 @@ async function call(
   return { status: res.status, json };
 }
 
-async function registerAndLogin(username: string, password: string): Promise<string> {
-  await call("POST", "/api/auth/register", { body: { username, password } });
+async function registerAndLogin(
+  username: string,
+  password: string,
+): Promise<{ token: string; userId: number }> {
+  const registered = await call("POST", "/api/auth/register", { body: { username, password } });
   const { json } = await call("POST", "/api/auth/login", { body: { username, password } });
-  return json.token;
+  return { token: json.token, userId: registered.json.user.id };
 }
 
 // register + login + create a product; scope routes reject unknown products
 async function loginWithProduct(
   username: string,
   productType = "widget",
-): Promise<{ token: string; productId: number }> {
-  const token = await registerAndLogin(username, "secret123");
+): Promise<{ token: string; userId: number; productId: number }> {
+  const { token, userId } = await registerAndLogin(username, "secret123");
   const created = await call("POST", "/api/products", { token, body: { productType } });
   expect(created.status).toBe(201);
-  return { token, productId: created.json.product.id };
+  return { token, userId, productId: created.json.product.id };
+}
+
+// The HTTP API has no settlement endpoint; run one settlement pass with a
+// cutoff after "now" so every pending record is folded.
+async function settleNow(userId: number, productId: number): Promise<void> {
+  await settlePendingBefore({ userId, productId }, new Date(Date.now() + 60_000));
 }
 
 function productUrl(productId: number, suffix = ""): string {
@@ -143,7 +153,7 @@ describe("auth endpoints", () => {
   });
 
   it("changes the password and removes the account", async () => {
-    const token = await registerAndLogin("alice", "secret123");
+    const { token } = await registerAndLogin("alice", "secret123");
     const changed = await call("PATCH", "/api/auth/password", {
       token,
       body: { oldPassword: "secret123", newPassword: "newpass456" },
@@ -163,7 +173,7 @@ describe("auth endpoints", () => {
 
 describe("product management endpoints", () => {
   it("creates, lists, rejects duplicates and deletes products", async () => {
-    const token = await registerAndLogin("alice", "secret123");
+    const { token } = await registerAndLogin("alice", "secret123");
 
     const empty = await call("GET", "/api/products", { token });
     expect(empty.status).toBe(200);
@@ -193,7 +203,7 @@ describe("product management endpoints", () => {
   });
 
   it("creates products with an orderMultiple and patches it later", async () => {
-    const token = await registerAndLogin("alice", "secret123");
+    const { token } = await registerAndLogin("alice", "secret123");
     const created = await call("POST", "/api/products", {
       token,
       body: { productType: "tee", orderMultiple: 20 },
@@ -257,7 +267,7 @@ describe("product management endpoints", () => {
 
 describe("product cycle flow over HTTP", () => {
   it("runs a full cycle and exposes the snapshot", async () => {
-    const { token, productId } = await loginWithProduct("alice", "widget");
+    const { token, userId, productId } = await loginWithProduct("alice", "widget");
     const u = (suffix = "") => productUrl(productId, suffix);
 
     const empty = await call("GET", u("/state"), { token });
@@ -284,18 +294,7 @@ describe("product cycle flow over HTTP", () => {
     expect(pending.json.records).toHaveLength(4);
     for (const record of pending.json.records) expect(record.cycle).toBeNull();
 
-    const summarized = await call("POST", u("/summarize"), { token });
-    expect(summarized.status).toBe(200);
-    expectState(summarized.json.state, {
-      cycle: 1,
-      inventory: 40,
-      soldTransit: 10,
-      boughtTransit: 40,
-      sent: 20,
-      received: 60,
-      sale: 30,
-      purchase: 100,
-    });
+    await settleNow(userId, productId);
 
     // records are kept and now marked with cycle 1
     const settled = await call("GET", u("/records"), { token });
@@ -317,7 +316,8 @@ describe("product cycle flow over HTTP", () => {
     // second cycle depends on the first snapshot
     await call("POST", u("/purchase"), { token, body: { amount: 50 } });
     await call("POST", u("/sell"), { token, body: { amount: 80 } });
-    const second = await call("POST", u("/summarize"), { token });
+    await settleNow(userId, productId);
+    const second = await call("GET", u("/state"), { token });
     expectState(second.json.state, {
       cycle: 2,
       inventory: 40,
@@ -333,16 +333,17 @@ describe("product cycle flow over HTTP", () => {
     expect(history.json.states).toHaveLength(2);
     expect(history.json.states.map((s: { cycle: number }) => s.cycle)).toEqual([1, 2]);
 
-    // settled records can never be folded twice
-    const noop = await call("POST", u("/summarize"), { token });
-    expect(noop.json.state).toBeNull();
+    // settled records can never be folded twice: the extra run adds no snapshot
+    await settleNow(userId, productId);
+    const after = await call("GET", u("/states"), { token });
+    expect(after.json.states).toHaveLength(2);
   });
 
   it("isolates scopes between products and users", async () => {
-    const { token, productId } = await loginWithProduct("alice", "widget");
+    const { token, userId, productId } = await loginWithProduct("alice", "widget");
     const bob = await loginWithProduct("bob", "widget");
     await call("POST", productUrl(productId, "/purchase"), { token, body: { amount: 10 } });
-    await call("POST", productUrl(productId, "/summarize"), { token });
+    await settleNow(userId, productId);
 
     const gadget = await call("GET", productUrl(999999, "/state"), { token });
     expect(gadget.status).toBe(404);

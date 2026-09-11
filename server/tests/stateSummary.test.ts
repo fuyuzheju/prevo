@@ -1,12 +1,13 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { db } from "../src/db.js";
 import { ApiError } from "../src/errors.js";
+import type { Scope } from "../../shared/model.ts";
 import {
   purchase,
   sell,
   send,
   receive,
-  summarize,
+  settlePendingBefore,
   listRecords,
 } from "../src/modules/stateSummary.js";
 import { getLatestState, listStates } from "../src/modules/stateMachine.js";
@@ -18,6 +19,12 @@ import {
   scopeFor,
   truncateAll,
 } from "./helpers.js";
+
+// Stands in for one daily settlement run: the cutoff sits just after "now",
+// so every record created during the test is settled.
+function settleAll(scope: Scope): Promise<number> {
+  return settlePendingBefore(scope, new Date(Date.now() + 60_000));
+}
 
 describe("records within a cycle", () => {
   beforeEach(truncateAll);
@@ -50,7 +57,7 @@ describe("records within a cycle", () => {
   });
 });
 
-describe("summarize", () => {
+describe("settlement (folding pending records into a cycle)", () => {
   beforeEach(truncateAll);
 
   it("folds the four record kinds into the state machine inputs", async () => {
@@ -61,7 +68,8 @@ describe("summarize", () => {
     await send(scope, 20);
     await receive(scope, 60);
 
-    const snapshot = await summarize(scope);
+    expect(await settleAll(scope)).toBe(1);
+    const snapshot = await getLatestState(scope);
     expect(snapshot).toEqual({
       cycle: 1,
       inventory: 40,
@@ -79,14 +87,15 @@ describe("summarize", () => {
     expect((await listStates(scope))[0]).toEqual(snapshot);
   });
 
-  it("keeps accumulating into the next cycle after a summarize", async () => {
+  it("keeps accumulating into the next cycle after a settlement", async () => {
     const scope = await createScope();
     await purchase(scope, 100);
     await receive(scope, 60);
-    await summarize(scope);
+    await settleAll(scope);
     await purchase(scope, 50);
     await sell(scope, 80);
-    const s2 = await summarize(scope);
+    expect(await settleAll(scope)).toBe(1);
+    const s2 = await getLatestState(scope);
     expect(s2?.cycle).toBe(2);
     expect(s2?.inventory).toBe(60);
     expect(s2?.soldTransit).toBe(80);
@@ -96,7 +105,7 @@ describe("summarize", () => {
 
   it("is a no-op when the cycle has no records", async () => {
     const scope = await createScope();
-    expect(await summarize(scope)).toBeNull();
+    expect(await settleAll(scope)).toBe(0);
     expect(await getLatestState(scope)).toBeNull();
   });
 
@@ -104,11 +113,9 @@ describe("summarize", () => {
     const scope = await createScope();
     await purchase(scope, 100);
     await receive(scope, 60);
-    const s1 = await summarize(scope);
-    const again = await summarize(scope);
-    expect(s1?.cycle).toBe(1);
-    expect(again).toBeNull();
-    expect((await listStates(scope))).toHaveLength(1);
+    expect(await settleAll(scope)).toBe(1);
+    expect(await settleAll(scope)).toBe(0);
+    expect(await listStates(scope)).toHaveLength(1);
   });
 
   it("isolates records by scope", async () => {
@@ -116,9 +123,9 @@ describe("summarize", () => {
     const a = scopeFor(owner, await createProduct(owner, "widget"));
     const b = scopeFor(owner, await createProduct(owner, "gadget"));
     await purchase(a, 100);
-    expect(await summarize(b)).toBeNull();
+    expect(await settleAll(b)).toBe(0);
     expect(await getLatestState(a)).toBeNull();
-    expect(await summarize(a)).not.toBeNull();
+    expect(await settleAll(a)).toBe(1);
   });
 });
 
@@ -129,8 +136,7 @@ describe("listRecords", () => {
     const scope = await createScope();
     await purchase(scope, 100); // settled in cycle 1
     await receive(scope, 60);
-    const s1 = await summarize(scope);
-    expect(s1?.cycle).toBe(1);
+    expect(await settleAll(scope)).toBe(1);
     await sell(scope, 30); // still pending
     await purchase(scope, 20);
 

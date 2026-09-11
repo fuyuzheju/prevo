@@ -72,6 +72,19 @@ describe("decidePurchase", () => {
     expect(mustDefined(decision.series[2], "series last day").real).toBe(10);
   });
 
+  it("forecasts from a same-day-only sell (one-day window, not an empty series)", async () => {
+    const scope = await createScope();
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 10, cycle: null, createdAt: new Date() },
+    });
+
+    const decision = await decidePurchase(scope);
+    expect(decision.forecast.windowDays).toBe(1);
+    expect(decision.safetyStock).toBe(140); // 10 / 1 day × 14
+    expect(decision.available).toBe(-10);
+    expect(decision.suggestedAmount).toBe(150); // 140 - (-10)
+  });
+
   it("recommends nothing when available covers the safety stock", async () => {
     const scope = await createScope();
     // plenty of stock in a settled snapshot, tiny demand

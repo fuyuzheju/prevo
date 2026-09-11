@@ -243,12 +243,6 @@ productsRouter.post("/:productId/receive", async (req, res) => {
   res.status(204).end();
 });
 
-productsRouter.post("/:productId/summarize", async (req, res) => {
-  await requireProduct(req);
-  const state = await stateSummary.summarize(productScopeOf(req));
-  res.json({ state });
-});
-
 // --- helpers ---
 
 // The express body is unknown at runtime; JSON bodies arrive as objects and

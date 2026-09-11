@@ -1,7 +1,12 @@
 import { db, type DbClient } from "../db.js";
 import { ApiError } from "../errors.js";
 import { isQuantity, isValidProductName, type Scope } from "../../../shared/model.ts";
-import { addLocalDays, localDateKey, parseLocalDateKey } from "../../../shared/date.ts";
+import {
+  addLocalDays,
+  isFutureDateKey,
+  localDateKey,
+  parseLocalDateKey,
+} from "../../../shared/date.ts";
 
 // Imported historical sales are a prediction-only dataset: they never touch
 // the state machine, the ledger or the live position. Real orders (SELL
@@ -56,6 +61,10 @@ function assertRows(entries: unknown): { date: string; amount: number; productTy
     const parsed = /^\d{4}-\d{2}-\d{2}$/.test(key) ? parseLocalDateKey(key) : new Date(NaN);
     if (!DATE_KEY_RE.test(key) || localDateKey(parsed) !== key) {
       throw new ApiError(400, "INVALID_DATE", `invalid date "${key}", expected YYYY-MM-DD`);
+    }
+    // future days would extend the prediction series past today
+    if (isFutureDateKey(key)) {
+      throw new ApiError(400, "INVALID_DATE", `date "${key}" is in the future`);
     }
     if (!isQuantity(amountRaw)) {
       throw new ApiError(400, "INVALID_AMOUNT", "amount must be a positive integer");
@@ -204,9 +213,13 @@ export async function buildDailySalesSeries(
   }
   if (!earliest) return [];
 
-  const todayStart = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+  // earliest is a raw timestamp (a SELL createdAt can be mid-day); normalize
+  // to its local midnight, or a same-day-only history would start after today
+  // and produce an empty series.
+  const firstDay = addLocalDays(earliest, 0);
+  const todayStart = addLocalDays(new Date(), 0);
   const series: SalesDay[] = [];
-  for (let day = earliest; day <= todayStart; day = addLocalDays(day, 1)) {
+  for (let day = firstDay; day <= todayStart; day = addLocalDays(day, 1)) {
     const key = localDateKey(day);
     series.push(byKey.get(key) ?? { date: key, real: 0, imported: 0, sale: 0 });
   }

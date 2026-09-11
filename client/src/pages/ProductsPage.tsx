@@ -162,7 +162,7 @@ export function ProductsPage() {
       return;
     }
     const orderMultiple = parseOrderMultiple(orderMultipleInput);
-    if (orderMultiple === Number.NaN) {
+    if (Number.isNaN(orderMultiple)) {
       setAddError("起订点需为大于等于 1 的整数");
       return;
     }
@@ -195,7 +195,7 @@ export function ProductsPage() {
       return;
     }
     const multiple = parseOrderMultiple(editing.multiple);
-    if (multiple === Number.NaN) {
+    if (Number.isNaN(multiple)) {
       setEditingError("起订点需为大于等于 1 的整数");
       return;
     }
@@ -398,7 +398,8 @@ export function ProductsPage() {
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               一张表可包含多种商品：每行 = 商品 | 日期 | 数量（表头名可不同，其余列忽略）。
-              仅用于预测，不影响库存与状态机；真实出售记录会自动计入。表里出现不存在的商品时该行不会导入。
+              仅用于预测，不影响库存与状态机；真实出售记录会自动计入。整批导入：表里出现不存在的商品时，
+              需要先创建这些商品才能导入。
             </p>
           </div>
           <div className="space-y-4 p-5">

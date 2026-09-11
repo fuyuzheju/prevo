@@ -17,11 +17,11 @@ This file describes the structure of the project.
 1. State summary
     - dependencies: state machine
     - API: 
-        - purchase(amount: number) => boolean, add a purchase bill to the current state, and be summarized later
+        - purchase(amount: number) => boolean, add a purchase bill to the current state, and be settled later
         - sell(amount: number) => undefined, add a sell bill
         - send(amount: number) => undefined, add a send record
         - receive(amount: number) => undefined, add a receive record
-        - summarize() => undefined, summarize all records on the current state and update state machine(input the four parameters), called at the end of the cycle
+        - settlePendingByDay() => number, fold the pending records per local calendar day into cycles (each day becomes one cycle, feeding the four state machine inputs); driven by the daily settlement job only, there is no HTTP endpoint
 
 1. User system
     - dependencies: none

@@ -38,6 +38,7 @@ describe("importSales validation", () => {
       { entries: [{ date: "2026-13-01", amount: 5 }] },
       { entries: [{ date: "2026-02-30", amount: 5 }] }, // rolls over to March
       { entries: [{ date: "2026/08/01", amount: 5 }] },
+      { entries: [{ date: daysAgo(-1), amount: 5 }] }, // tomorrow
       { entries: [{ date: daysAgo(1), amount: 0 }] },
       { entries: [{ date: daysAgo(1), amount: -3 }] },
       { entries: [{ date: daysAgo(1), amount: 1.5 }] },
@@ -92,6 +93,15 @@ describe("buildDailySalesSeries", () => {
     expect(series.reduce((sum, day) => sum + day.sale, 0)).toBe(42);
   });
 
+  it("keeps a same-day sell in the series instead of returning nothing", async () => {
+    const scope = await createScope();
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 10, cycle: null, createdAt: new Date() },
+    });
+    const series = await buildDailySalesSeries(scope);
+    expect(series).toEqual([{ date: daysAgo(0), real: 10, imported: 0, sale: 10 }]);
+  });
+
   it("returns an empty series without any data and isolates scopes", async () => {
     const scope = await createScope();
     expect(await buildDailySalesSeries(scope)).toEqual([]);
@@ -142,6 +152,7 @@ describe("importSalesMany (multi-product)", () => {
     for (const bad of [
       { productType: "has space", date: daysAgo(1), amount: 5 },
       { productType: "tee", date: "2026-02-30", amount: 5 },
+      { productType: "tee", date: daysAgo(-1), amount: 5 }, // tomorrow
       { productType: "tee", date: daysAgo(1), amount: 0 },
       { productType: "tee", date: daysAgo(1), amount: 2.5 },
     ]) {
