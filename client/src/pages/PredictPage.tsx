@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Calculator,
@@ -14,12 +14,20 @@ import {
 import * as api from "../lib/api.ts";
 import { formatQuantity, QUANTITY_SCALE } from "../../../shared/quantity.ts";
 import type { SalesPrediction } from "../lib/types.ts";
+import { aggregateSeries, type Granularity } from "../lib/series.ts";
 import { useProducts } from "../hooks/useProducts.ts";
 import { ProductSidebar } from "../components/ProductSidebar.tsx";
 import { SalesChart } from "../components/SalesChart.tsx";
 import { Button, Card, CenteredSpinner, InlineMessage, cn } from "../components/ui.tsx";
 
 const fmtNum = new Intl.NumberFormat("zh-CN");
+
+const GRANULARITIES: Record<Granularity, { chip: string; title: string; unit: string }> = {
+  day: { chip: "按天", title: "每日", unit: "天" },
+  week: { chip: "按周", title: "每周", unit: "周" },
+  month: { chip: "按月", title: "每月", unit: "个月" },
+};
+const GRANULARITY_ORDER: Granularity[] = ["day", "week", "month"];
 
 export function PredictPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
@@ -28,6 +36,13 @@ export function PredictPage() {
   const [prediction, setPrediction] = useState<SalesPrediction | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [granularity, setGranularity] = useState<Granularity>("day");
+
+  const points = useMemo(
+    () => aggregateSeries(prediction?.series ?? [], granularity),
+    [prediction, granularity],
+  );
+  const granularityInfo = GRANULARITIES[granularity];
 
   const load = useCallback(async (productId: number) => {
     setLoading(true);
@@ -98,18 +113,40 @@ export function PredictPage() {
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
                 <h2 className="flex items-center gap-1.5 font-semibold text-slate-900">
                   <History className="size-4 text-blue-600" />
-                  每日销量
+                  {granularityInfo.title}销量
                 </h2>
-                <span className="text-xs text-slate-400">
-                  滚轮 / 拖拽底部滑块可缩放 · 共 {prediction.series.length} 天
-                </span>
+                {prediction.series.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <div className="flex rounded-lg bg-slate-100 p-0.5">
+                      {GRANULARITY_ORDER.map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setGranularity(value)}
+                          aria-pressed={granularity === value}
+                          className={cn(
+                            "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                            granularity === value
+                              ? "bg-white text-blue-600 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700",
+                          )}
+                        >
+                          {GRANULARITIES[value].chip}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      滚轮 / 拖拽底部滑块可缩放 · 共 {points.length} {granularityInfo.unit}
+                    </span>
+                  </div>
+                )}
               </div>
               {prediction.series.length === 0 ? (
                 <p className="py-14 text-center text-sm text-slate-400">
                   还没有销量数据：到「商品管理」导入历史销量，或添加「出售」记录后会自动出现在这里
                 </p>
               ) : (
-                <SalesChart series={prediction.series} />
+                <SalesChart points={points} granularity={granularity} />
               )}
             </Card>
 
