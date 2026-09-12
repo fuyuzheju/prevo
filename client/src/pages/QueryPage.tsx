@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -8,98 +8,25 @@ import {
   RefreshCw,
   Wallet,
 } from "lucide-react";
-import * as api from "../lib/api.ts";
 import { formatQuantity } from "../../../shared/quantity.ts";
-import type { RecordEntry, StateSnapshot } from "../lib/types.ts";
 import { computeLiveStatus } from "../lib/status.ts";
 import { useProducts } from "../hooks/useProducts.ts";
+import { useProductSelection } from "../hooks/useProductSelection.ts";
+import { useProductStates, type ProductState } from "../hooks/useProductStates.ts";
 import { ProductSidebar } from "../components/ProductSidebar.tsx";
 import { RecordBadge } from "../components/RecordBadge.tsx";
+import { StatTile } from "../components/StatTile.tsx";
 import { Card, CenteredSpinner, InlineMessage, cn } from "../components/ui.tsx";
 import { formatDateTime } from "../lib/format.ts";
 
-interface ProductResult {
-  productId: number;
-  name: string;
-  latest: StateSnapshot | null;
-  records: RecordEntry[];
-  error: string | null;
-  loading: boolean;
-}
-
 export function QueryPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
-  const [checked, setChecked] = useState<ReadonlySet<number>>(new Set());
-  const [results, setResults] = useState<Record<number, ProductResult>>({});
-
-  const toggle = useCallback((productId: number, next: boolean) => {
-    setChecked((prev) => {
-      const copy = new Set(prev);
-      if (next) copy.add(productId);
-      else copy.delete(productId);
-      return copy;
-    });
-  }, []);
-
-  const toggleAll = useCallback(
-    (next: boolean) => {
-      setChecked(next ? new Set(products.map((p) => p.id)) : new Set());
-    },
-    [products],
-  );
-
-  const selectedIds = useMemo(
-    () => products.map((p) => p.id).filter((id) => checked.has(id)),
-    [products, checked],
-  );
-
-  const loadProduct = useCallback(async (productId: number) => {
-    // always seed a complete placeholder first so renders never see a
-    // half-built entry (records must be an array even while loading)
-    const product = products.find((p) => p.id === productId);
-    const name = product?.productType ?? "";
-    setResults((prev) => {
-      const existing = prev[productId];
-      return {
-        ...prev,
-        [productId]: existing
-          ? { ...existing, loading: true }
-          : { productId, name, latest: null, records: [], error: null, loading: true },
-      };
-    });
-    try {
-      const [latest, records] = await Promise.all([
-        api.getLatestState(productId),
-        api.listRecords(productId),
-      ]);
-      setResults((prev) => ({
-        ...prev,
-        [productId]: { productId, name, latest, records, error: null, loading: false },
-      }));
-    } catch (err) {
-      setResults((prev) => ({
-        ...prev,
-        [productId]: {
-          productId,
-          name,
-          latest: prev[productId]?.latest ?? null,
-          records: prev[productId]?.records ?? [],
-          error: api.errorMessage(err),
-          loading: false,
-        },
-      }));
-    }
-  }, [products]);
-
-  useEffect(() => {
-    for (const productId of selectedIds) {
-      void loadProduct(productId);
-    }
-  }, [selectedIds, loadProduct]);
+  const { checked, selectedIds, toggle, toggleAll } = useProductSelection(products);
+  const { results, load } = useProductStates(products, selectedIds);
 
   const selectedResults = selectedIds
     .map((id) => results[id])
-    .filter((r): r is ProductResult => Boolean(r));
+    .filter((result): result is ProductState => Boolean(result));
 
   const mergedFeed = useMemo(() => {
     const rows = selectedResults
@@ -158,7 +85,7 @@ export function QueryPage() {
             {anyLoading && <CenteredSpinner label="加载商品数据…" />}
             <div className={cn("grid gap-4", selectedResults.length > 1 && "sm:grid-cols-2")}>
               {selectedResults.map((result) => (
-                <ProductCard key={result.productId} result={result} onRetry={() => void loadProduct(result.productId)} />
+                <ProductCard key={result.productId} result={result} onRetry={() => void load(result.productId)} />
               ))}
             </div>
 
@@ -173,7 +100,7 @@ export function QueryPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    for (const productId of selectedIds) void loadProduct(productId);
+                    for (const productId of selectedIds) void load(productId);
                   }}
                   className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
                 >
@@ -238,7 +165,7 @@ function ProductCard({
   result,
   onRetry,
 }: {
-  result: ProductResult;
+  result: ProductState;
   onRetry: () => void;
 }) {
   const live = computeLiveStatus(result.latest, result.records);
@@ -297,34 +224,5 @@ function ProductCard({
         </>
       )}
     </Card>
-  );
-}
-
-function StatTile({
-  icon: Icon,
-  label,
-  value,
-  accent,
-}: {
-  icon: typeof Wallet;
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div className="px-3 py-3 text-center">
-      <p className={cn("flex items-center justify-center gap-1 text-xs", accent ? "text-blue-600" : "text-slate-400")}>
-        <Icon className="size-3" />
-        {label}
-      </p>
-      <p
-        className={cn(
-          "mt-1 text-lg font-bold tabular-nums",
-          accent ? "text-blue-600" : "text-slate-800",
-        )}
-      >
-        {value}
-      </p>
-    </div>
   );
 }

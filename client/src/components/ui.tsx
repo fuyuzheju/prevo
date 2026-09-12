@@ -117,6 +117,37 @@ export function InlineMessage({
   );
 }
 
+export function Modal({
+  title,
+  onClose,
+  maxWidth = "max-w-sm",
+  children,
+}: {
+  title: ReactNode;
+  onClose: () => void;
+  maxWidth?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+      <Card className={cn("max-h-[85vh] w-full overflow-y-auto p-5", maxWidth)}>
+        <div className="flex items-start justify-between gap-4">
+          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭"
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="mt-4">{children}</div>
+      </Card>
+    </div>
+  );
+}
+
 export function ConfirmDialog({
   title,
   children,
@@ -135,29 +166,16 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <Card className="w-full max-w-sm p-5">
-        <div className="flex items-start justify-between gap-4">
-          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="关闭"
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-        <div className="mt-2 text-sm text-slate-600">{children}</div>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onCancel} disabled={busy}>
-            取消
-          </Button>
-          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={busy}>
-            {confirmLabel}
-          </Button>
-        </div>
-      </Card>
-    </div>
+    <Modal title={title} onClose={onCancel}>
+      <div className="text-sm text-slate-600">{children}</div>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onCancel} disabled={busy}>
+          取消
+        </Button>
+        <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={busy}>
+          {confirmLabel}
+        </Button>
+      </div>
+    </Modal>
   );
 }
