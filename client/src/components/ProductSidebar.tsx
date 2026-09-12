@@ -1,7 +1,8 @@
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, Package, Settings2 } from "lucide-react";
+import { Check, Package, Search, Settings2, X } from "lucide-react";
 import type { ProductItem } from "../lib/types.ts";
-import { cn } from "./ui.tsx";
+import { Input, cn } from "./ui.tsx";
 
 type SidebarMode = "check" | "single" | "none";
 
@@ -12,7 +13,7 @@ export interface ProductSidebarProps {
   checked?: ReadonlySet<number>;
   selected?: number | null;
   onToggle?: (productId: number, next: boolean) => void;
-  onToggleAll?: (next: boolean) => void;
+  onSetMany?: (productIds: readonly number[], next: boolean) => void;
   onSelect?: (productId: number | null) => void;
 }
 
@@ -38,23 +39,61 @@ export function ProductSidebar({
   checked,
   selected,
   onToggle,
-  onToggleAll,
+  onSetMany,
   onSelect,
 }: ProductSidebarProps) {
-  const allChecked = products.length > 0 && products.every((p) => checked?.has(p.id));
+  const [query, setQuery] = useState("");
+  const keyword = query.trim().toLowerCase();
+  const visible = useMemo(
+    () =>
+      keyword === ""
+        ? products
+        : products.filter((product) => product.productType.toLowerCase().includes(keyword)),
+    [products, keyword],
+  );
+  const allVisibleChecked =
+    visible.length > 0 && visible.every((product) => checked?.has(product.id));
 
-  const chipRow = (
-    <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 lg:hidden">
-      {mode === "none" ? null : products.length > 1 && mode === "check" && onToggleAll ? (
+  const searchBox = (
+    <div className="relative">
+      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-slate-400" />
+      <Input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="搜索商品"
+        aria-label="搜索商品"
+        className="py-1.5 pr-7 pl-8"
+      />
+      {query !== "" && (
         <button
           type="button"
-          onClick={() => onToggleAll(!allChecked)}
+          onClick={() => setQuery("")}
+          aria-label="清空搜索"
+          className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
+    </div>
+  );
+
+  const chipRow = (
+    <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto pb-1">
+      {mode === "none" ? null : visible.length > 1 && mode === "check" && onSetMany ? (
+        <button
+          type="button"
+          onClick={() =>
+            onSetMany(
+              visible.map((product) => product.id),
+              !allVisibleChecked,
+            )
+          }
           className="shrink-0 rounded-full border border-slate-300 px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50"
         >
-          {allChecked ? "清空" : "全选"}
+          {allVisibleChecked ? "清空" : "全选"}
         </button>
       ) : null}
-      {products.map((product) => {
+      {visible.map((product) => {
         const active = mode === "check" ? checked?.has(product.id) : selected === product.id;
         return (
           <button
@@ -90,7 +129,10 @@ export function ProductSidebar({
 
   return (
     <>
-      {chipRow}
+      <div className="space-y-2 lg:hidden">
+        {searchBox}
+        {chipRow}
+      </div>
       <aside className="hidden w-60 shrink-0 lg:block">
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -102,22 +144,31 @@ export function ProductSidebar({
               {loading ? "…" : products.length}
             </span>
           </div>
+          <div className="p-2 pb-0">{searchBox}</div>
           <ul className="max-h-[60vh] space-y-0.5 overflow-y-auto p-2">
-            {mode === "check" && products.length > 1 && onToggleAll && (
+            {mode === "check" && visible.length > 1 && onSetMany && (
               <li className="flex justify-end pb-1 pr-1">
                 <button
                   type="button"
-                  onClick={() => onToggleAll(!allChecked)}
+                  onClick={() =>
+                    onSetMany(
+                      visible.map((product) => product.id),
+                      !allVisibleChecked,
+                    )
+                  }
                   className="text-xs font-medium text-blue-600 hover:underline"
                 >
-                  {allChecked ? "清空全部" : "全选"}
+                  {allVisibleChecked ? "清空全部" : "全选"}
                 </button>
               </li>
             )}
             {products.length === 0 && !loading && (
               <li className="px-2 py-6 text-center text-xs text-slate-400">还没有商品</li>
             )}
-            {products.map((product) => {
+            {products.length > 0 && visible.length === 0 && (
+              <li className="px-2 py-6 text-center text-xs text-slate-400">没有匹配的商品</li>
+            )}
+            {visible.map((product) => {
               const active =
                 mode === "check" ? checked?.has(product.id) : selected === product.id;
               return (

@@ -21,7 +21,7 @@ import { formatDateTime } from "../lib/format.ts";
 
 export function QueryPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
-  const { checked, selectedIds, toggle, toggleAll } = useProductSelection(products);
+  const { checked, selectedIds, toggle, setMany } = useProductSelection(products);
   const { results, load } = useProductStates(products, selectedIds);
 
   const selectedResults = selectedIds
@@ -50,7 +50,7 @@ export function QueryPage() {
         mode="check"
         checked={checked}
         onToggle={toggle}
-        onToggleAll={toggleAll}
+        onSetMany={setMany}
       />
 
       <div className="min-w-0 flex-1 space-y-6">
