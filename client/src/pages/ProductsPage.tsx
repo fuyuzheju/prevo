@@ -216,7 +216,12 @@ export function ProductsPage() {
   function startEdit(productId: number) {
     const product = products.find((p) => p.id === productId);
     if (!product) return;
-    setEditing({ id: product.id, name: product.productType, multiple: String(product.orderMultiple) });
+    setEditing({
+      id: product.id,
+      name: product.productType,
+      // the stored value is fixed-point; 1 means "no constraint" and shows as empty
+      multiple: product.orderMultiple === 1 ? "" : formatQuantity(product.orderMultiple),
+    });
     setEditingError(null);
   }
 
