@@ -9,10 +9,11 @@ import {
   type RecordKind,
   type Scope,
 } from "../../../shared/model.ts";
+import { localDateKey } from "../../../shared/date.ts";
 
-// Purchase decision (docs/decision.md): buy so that the live available
-// position covers the safety stock, where the safety stock is the predicted
-// total sales of the next two weeks.
+// Purchase decision (`docs/struc.md`): buy so that the live available position
+// covers the safety stock, where the safety stock is the predicted total sales
+// of the next two weeks.
 
 export interface PurchaseDecision {
   available: number;
@@ -70,11 +71,17 @@ export async function decidePurchase(
     getLivePosition(scope, client),
     client.product.findUnique({
       where: { id: scope.productId },
-      select: { orderMultiple: true },
+      select: { productType: true, orderMultiple: true },
     }),
   ]);
   const orderMultiple = product?.orderMultiple ?? 1;
-  const forecast = forecastNext14Days(series.map((day) => ({ total: day.sale })));
+  // The series always runs up to today, so today is the last known sales day.
+  const forecast = await forecastNext14Days({
+    skuId: product?.productType ?? String(scope.productId),
+    skuName: product?.productType ?? String(scope.productId),
+    asOfDate: localDateKey(new Date()),
+    dailyTotals: series.map((day) => ({ date: day.date, total: day.sale })),
+  });
   const safetyStock = forecast.predictedTotal;
   const suggestedAmount = roundUpToMultiple(safetyStock - position.available, orderMultiple);
   return {

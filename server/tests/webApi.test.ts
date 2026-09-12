@@ -482,9 +482,10 @@ describe("sales import and prediction over HTTP", () => {
     expect(typeof predict.json.available).toBe("number");
     expect(typeof predict.json.safetyStock).toBe("number");
     expect(typeof predict.json.suggestedAmount).toBe("number");
-    expect(predict.json.forecast.method).toBe("trailing-average");
+    expect(predict.json.forecast.method).toBe("FULL_MEAN_FALLBACK");
+    expect(predict.json.forecast.windowDays).toBe(2); // days actually averaged
     expect(predict.json.available).toBe(-10); // pending sell 10, nothing else
-    expect(predict.json.safetyStock).toBeGreaterThan(0);
+    expect(predict.json.safetyStock).toBeCloseTo(210, 6); // (20 + 10) / 2 days × 14
     expect(predict.json.suggestedAmount).toBe(predict.json.safetyStock + 10);
     const series: { date: string; real: number; imported: number; sale: number }[] =
       predict.json.series;
