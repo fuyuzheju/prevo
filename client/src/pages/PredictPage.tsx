@@ -22,6 +22,48 @@ import { Button, Card, CenteredSpinner, InlineMessage, cn } from "../components/
 
 const fmtNum = new Intl.NumberFormat("zh-CN");
 
+// Model branches the predictor can report (deployment spec §4.3). WMA84 is the
+// production model; every other branch is a cold-start fallback whose forecast
+// is far less trustworthy, so the UI has to tell them apart.
+const PRODUCTION_MODEL = "WMA_84";
+const MODEL_LABELS: Readonly<Record<string, string>> = {
+  WMA_84: "WMA84",
+  MA_56_FALLBACK: "MA56 降级",
+  MA_28_FALLBACK: "MA28 降级",
+  FULL_MEAN_FALLBACK: "全历史均值降级",
+  ALL_ZERO: "无销量",
+};
+
+interface ModelInfo {
+  label: string;
+  tone: string;
+  degraded: boolean;
+}
+
+// A branch we do not recognise (a swapped-in predict_core) is shown verbatim
+// rather than guessed at, so a new model id can never be silently mislabelled.
+function modelInfo(method: string): ModelInfo {
+  if (method === PRODUCTION_MODEL) {
+    return { label: MODEL_LABELS[method] ?? method, tone: "bg-blue-50 text-blue-600", degraded: false };
+  }
+  const label = MODEL_LABELS[method];
+  if (label === undefined) {
+    return { label: method, tone: "bg-slate-100 text-slate-500", degraded: false };
+  }
+  return {
+    label,
+    tone: method === "ALL_ZERO" ? "bg-slate-100 text-slate-500" : "bg-amber-50 text-amber-700",
+    degraded: true,
+  };
+}
+
+// Why the forecast fell back, spelled out for the user, or null when the
+// production model ran.
+function degradedNotice(model: ModelInfo, method: string, windowDays: number): string | null {
+  if (!model.degraded) return null;
+  if (method === "ALL_ZERO") return "这个商品还没有任何销量记录，预测结果为 0。";
+  return `历史销量不足 84 天，本次改用近 ${windowDays} 天的均值估算，可信度低于常规预测。`;
+}
 const GRANULARITIES: Record<Granularity, { chip: string; title: string; unit: string }> = {
   day: { chip: "按天", title: "每日", unit: "天" },
   week: { chip: "按周", title: "每周", unit: "周" },
@@ -151,59 +193,86 @@ export function PredictPage() {
             </Card>
 
             {/* purchase decision */}
-            <Card className="overflow-hidden">
-              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-                <h2 className="flex items-center gap-1.5 font-semibold text-slate-900">
-                  <ShieldCheck className="size-4 text-blue-600" />
-                  采购决策
-                </h2>
-                <span className="text-xs text-slate-400">
-                  预测：近 {prediction.forecast.windowDays} 天日均
-                  {fmtNum.format(prediction.forecast.dailyRate / QUANTITY_SCALE)} × 14 天
-                </span>
-              </div>
-              <div className="grid divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                <DecisionTile
-                  icon={Wallet}
-                  label="当前可用量"
-                  tone="text-slate-900"
-                  value={formatQuantity(prediction.available)}
-                  hint="库存 + 在途 − 已售未发"
-                />
-                <DecisionTile
-                  icon={DatabaseBackup}
-                  label="安全库存"
-                  tone="text-blue-600"
-                  value={formatQuantity(prediction.safetyStock)}
-                  hint="预测下两周总销量"
-                />
-                <DecisionTile
-                  icon={ShoppingCart}
-                  label="采购建议"
-                  tone={prediction.suggestedAmount > 0 ? "text-emerald-600" : "text-slate-400"}
-                  value={formatQuantity(prediction.suggestedAmount)}
-                  hint={
-                    prediction.suggestedAmount > 0
-                      ? prediction.orderMultiple > 1
-                        ? `已按起订点 ${formatQuantity(prediction.orderMultiple)} 向上取整（安全库存 − 可用量的倍数）`
-                        : "建议量 = 安全库存 − 当前可用量"
-                      : "库存充足，无需采购"
-                  }
-                  action={
-                    prediction.suggestedAmount > 0 ? (
-                      <Button onClick={() => draftPurchase()} className="mt-3 w-full">
-                        <ClipboardPlus className="size-4" />
-                        起草采购单
-                      </Button>
-                    ) : undefined
-                  }
-                />
-              </div>
-            </Card>
+            <PurchaseDecisionCard prediction={prediction} onDraftPurchase={draftPurchase} />
           </>
         )}
       </div>
     </div>
+  );
+}
+
+function PurchaseDecisionCard({
+  prediction,
+  onDraftPurchase,
+}: {
+  prediction: SalesPrediction;
+  onDraftPurchase: () => void;
+}) {
+  const { forecast } = prediction;
+  const model = modelInfo(forecast.method);
+  const notice = degradedNotice(model, forecast.method, forecast.windowDays);
+  // Only WMA84 averages with non-uniform weights; the fallback branches average
+  // evenly, so calling every branch a plain 日均 would misstate what was computed.
+  const weighted = forecast.method === PRODUCTION_MODEL;
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4">
+        <h2 className="flex items-center gap-1.5 font-semibold text-slate-900">
+          <ShieldCheck className="size-4 text-blue-600" />
+          采购决策
+          <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", model.tone)}>
+            {model.label}
+          </span>
+        </h2>
+        <span className="text-xs text-slate-400">
+          预测：近 {forecast.windowDays} 天{weighted ? "加权" : ""}日均
+          {fmtNum.format(forecast.dailyRate / QUANTITY_SCALE)} × 14 天
+        </span>
+      </div>
+      {notice !== null && (
+        <p className="border-b border-amber-100 bg-amber-50 px-5 py-2 text-xs text-amber-700">
+          {notice}
+        </p>
+      )}
+      <div className="grid divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <DecisionTile
+          icon={Wallet}
+          label="当前可用量"
+          tone="text-slate-900"
+          value={formatQuantity(prediction.available)}
+          hint="库存 + 在途 − 已售未发"
+        />
+        <DecisionTile
+          icon={DatabaseBackup}
+          label="安全库存"
+          tone="text-blue-600"
+          value={formatQuantity(prediction.safetyStock)}
+          hint="预测下两周总销量"
+        />
+        <DecisionTile
+          icon={ShoppingCart}
+          label="采购建议"
+          tone={prediction.suggestedAmount > 0 ? "text-emerald-600" : "text-slate-400"}
+          value={formatQuantity(prediction.suggestedAmount)}
+          hint={
+            prediction.suggestedAmount > 0
+              ? prediction.orderMultiple > 1
+                ? `已按起订点 ${formatQuantity(prediction.orderMultiple)} 向上取整（安全库存 − 可用量的整数倍）`
+                : "建议量 = 安全库存 − 当前可用量"
+              : "库存充足，无需采购"
+          }
+          action={
+            prediction.suggestedAmount > 0 ? (
+              <Button onClick={onDraftPurchase} className="mt-3 w-full">
+                <ClipboardPlus className="size-4" />
+                起草采购单
+              </Button>
+            ) : undefined
+          }
+        />
+      </div>
+    </Card>
   );
 }
 
