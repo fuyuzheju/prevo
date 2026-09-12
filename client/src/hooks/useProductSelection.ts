@@ -5,7 +5,7 @@ export interface ProductSelection {
   checked: ReadonlySet<number>;
   selectedIds: number[];
   toggle: (productId: number, next: boolean) => void;
-  toggleAll: (next: boolean) => void;
+  setMany: (productIds: readonly number[], next: boolean) => void;
 }
 
 export function useProductSelection(
@@ -33,12 +33,16 @@ export function useProductSelection(
     });
   }, []);
 
-  const toggleAll = useCallback(
-    (next: boolean) => {
-      setChecked(next ? new Set(products.map((product) => product.id)) : new Set());
-    },
-    [products],
-  );
+  const setMany = useCallback((productIds: readonly number[], next: boolean) => {
+    setChecked((prev) => {
+      const copy = new Set(prev);
+      for (const productId of productIds) {
+        if (next) copy.add(productId);
+        else copy.delete(productId);
+      }
+      return copy;
+    });
+  }, []);
 
   // Product order, and without ids that are gone from the list (deleted).
   const selectedIds = useMemo(
@@ -46,5 +50,5 @@ export function useProductSelection(
     [products, checked],
   );
 
-  return { checked, selectedIds, toggle, toggleAll };
+  return { checked, selectedIds, toggle, setMany };
 }

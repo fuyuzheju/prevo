@@ -34,7 +34,7 @@ import {
 
 export function ProductsPage() {
   const { products, loading, error, reload } = useProducts();
-  const { checked, selectedIds, toggle, toggleAll } = useProductSelection(products, {
+  const { checked, selectedIds, toggle, setMany } = useProductSelection(products, {
     defaultAll: true,
   });
   const { results, load } = useProductStates(products, selectedIds);
@@ -194,7 +194,7 @@ export function ProductsPage() {
         mode="check"
         checked={checked}
         onToggle={toggle}
-        onToggleAll={toggleAll}
+        onSetMany={setMany}
       />
 
       <div className="min-w-0 flex-1 space-y-6">
