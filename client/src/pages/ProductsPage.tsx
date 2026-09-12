@@ -144,6 +144,7 @@ export function ProductsPage() {
       await reload();
     } catch (err) {
       setDeleteError(api.errorMessage(err));
+    } finally {
       setDeleting(false);
     }
   }
