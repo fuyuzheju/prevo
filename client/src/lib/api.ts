@@ -89,7 +89,7 @@ function recordOf(value: unknown): Record<string, unknown> | null {
 }
 
 function badResponse(): never {
-  throw new ApiError(502, "BAD_RESPONSE", "服务器返回了无法识别的数据");
+  throw new ApiError(502, "BAD_RESPONSE", "Invalid data returned from API");
 }
 
 function stringField(record: Record<string, unknown>, key: string): string {
@@ -101,7 +101,7 @@ function stringField(record: Record<string, unknown>, key: string): string {
 function numberField(record: Record<string, unknown>, key: string): number {
   const value = record[key];
   if (typeof value !== "number") badResponse();
-  return value;
+  return Math.ceil(value); // only interger in database
 }
 
 function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> {

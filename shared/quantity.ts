@@ -37,6 +37,7 @@ export function parseQuantity(input: string | number): number | null {
 // Scaled integer → the shortest decimal string that represents it exactly:
 // 500 → "0.5", -1500 → "-1.5", 1000 → "1", 1 → "0.001".
 export function formatQuantity(value: number): string {
+  if (!Number.isInteger(value)) throw new Error("Expected an integer");
   const sign = value < 0 ? "-" : "";
   const magnitude = Math.abs(value);
   const whole = Math.floor(magnitude / QUANTITY_SCALE);
