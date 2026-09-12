@@ -1,7 +1,13 @@
 import { db } from "../src/db.js";
 import type { Scope } from "../../shared/model.ts";
+import { QUANTITY_SCALE } from "../../shared/quantity.ts";
 
 let userCounter = 0;
+
+// Human quantity (e.g. 0.5) -> fixed-point storage value (500).
+export function q(units: number): number {
+  return Math.round(units * QUANTITY_SCALE);
+}
 
 export async function truncateAll(): Promise<void> {
   await db.scopeRecord.deleteMany();

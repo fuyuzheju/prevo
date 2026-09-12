@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Calculator,
@@ -12,7 +12,9 @@ import {
   Wallet,
 } from "lucide-react";
 import * as api from "../lib/api.ts";
+import { formatQuantity, QUANTITY_SCALE } from "../../../shared/quantity.ts";
 import type { SalesPrediction } from "../lib/types.ts";
+import { aggregateSeries, type Granularity } from "../lib/series.ts";
 import { useProducts } from "../hooks/useProducts.ts";
 import { ProductSidebar } from "../components/ProductSidebar.tsx";
 import { SalesChart } from "../components/SalesChart.tsx";
@@ -62,6 +64,12 @@ function degradedNotice(model: ModelInfo, method: string, windowDays: number): s
   if (method === "ALL_ZERO") return "这个商品还没有任何销量记录，预测结果为 0。";
   return `历史销量不足 84 天，本次改用近 ${windowDays} 天的均值估算，可信度低于常规预测。`;
 }
+const GRANULARITIES: Record<Granularity, { chip: string; title: string; unit: string }> = {
+  day: { chip: "按天", title: "每日", unit: "天" },
+  week: { chip: "按周", title: "每周", unit: "周" },
+  month: { chip: "按月", title: "每月", unit: "个月" },
+};
+const GRANULARITY_ORDER: Granularity[] = ["day", "week", "month"];
 
 export function PredictPage() {
   const { products, loading: productsLoading, error: productsError } = useProducts();
@@ -70,6 +78,13 @@ export function PredictPage() {
   const [prediction, setPrediction] = useState<SalesPrediction | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [granularity, setGranularity] = useState<Granularity>("day");
+
+  const points = useMemo(
+    () => aggregateSeries(prediction?.series ?? [], granularity),
+    [prediction, granularity],
+  );
+  const granularityInfo = GRANULARITIES[granularity];
 
   const load = useCallback(async (productId: number) => {
     setLoading(true);
@@ -140,18 +155,40 @@ export function PredictPage() {
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
                 <h2 className="flex items-center gap-1.5 font-semibold text-slate-900">
                   <History className="size-4 text-blue-600" />
-                  每日销量
+                  {granularityInfo.title}销量
                 </h2>
-                <span className="text-xs text-slate-400">
-                  滚轮 / 拖拽底部滑块可缩放 · 共 {prediction.series.length} 天
-                </span>
+                {prediction.series.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <div className="flex rounded-lg bg-slate-100 p-0.5">
+                      {GRANULARITY_ORDER.map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setGranularity(value)}
+                          aria-pressed={granularity === value}
+                          className={cn(
+                            "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                            granularity === value
+                              ? "bg-white text-blue-600 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700",
+                          )}
+                        >
+                          {GRANULARITIES[value].chip}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      滚轮 / 拖拽底部滑块可缩放 · 共 {points.length} {granularityInfo.unit}
+                    </span>
+                  </div>
+                )}
               </div>
               {prediction.series.length === 0 ? (
                 <p className="py-14 text-center text-sm text-slate-400">
                   还没有销量数据：到「商品管理」导入历史销量，或添加「出售」记录后会自动出现在这里
                 </p>
               ) : (
-                <SalesChart series={prediction.series} />
+                <SalesChart points={points} granularity={granularity} />
               )}
             </Card>
 
@@ -190,7 +227,7 @@ function PurchaseDecisionCard({
         </h2>
         <span className="text-xs text-slate-400">
           预测：近 {forecast.windowDays} 天{weighted ? "加权" : ""}日均
-          {fmtNum.format(forecast.dailyRate)} × 14 天
+          {fmtNum.format(forecast.dailyRate / QUANTITY_SCALE)} × 14 天
         </span>
       </div>
       {notice !== null && (
@@ -203,25 +240,25 @@ function PurchaseDecisionCard({
           icon={Wallet}
           label="当前可用量"
           tone="text-slate-900"
-          value={prediction.available}
+          value={formatQuantity(prediction.available)}
           hint="库存 + 在途 − 已售未发"
         />
         <DecisionTile
           icon={DatabaseBackup}
           label="安全库存"
           tone="text-blue-600"
-          value={prediction.safetyStock}
+          value={formatQuantity(prediction.safetyStock)}
           hint="预测下两周总销量"
         />
         <DecisionTile
           icon={ShoppingCart}
           label="采购建议"
           tone={prediction.suggestedAmount > 0 ? "text-emerald-600" : "text-slate-400"}
-          value={prediction.suggestedAmount}
+          value={formatQuantity(prediction.suggestedAmount)}
           hint={
             prediction.suggestedAmount > 0
               ? prediction.orderMultiple > 1
-                ? `已按起订点 ${prediction.orderMultiple} 向上取整（安全库存 − 可用量的整数倍）`
+                ? `已按起订点 ${formatQuantity(prediction.orderMultiple)} 向上取整（安全库存 − 可用量的整数倍）`
                 : "建议量 = 安全库存 − 当前可用量"
               : "库存充足，无需采购"
           }
@@ -249,7 +286,7 @@ function DecisionTile({
 }: {
   icon: typeof Wallet;
   label: string;
-  value: number;
+  value: string;
   hint: string;
   tone: string;
   action?: ReactNode;
@@ -260,9 +297,7 @@ function DecisionTile({
         <Icon className="size-4 text-blue-500" />
         {label}
       </p>
-      <p className={cn("mt-2 text-4xl font-bold tabular-nums tracking-tight", tone)}>
-        {fmtNum.format(value)}
-      </p>
+      <p className={cn("mt-2 text-4xl font-bold tabular-nums tracking-tight", tone)}>{value}</p>
       <p className="mt-2 flex items-center gap-1 text-xs text-slate-400">
         <PackageOpen className="size-3" />
         {hint}

@@ -160,6 +160,10 @@ export async function forecastNext14Days(request: ForecastRequest): Promise<TwoW
     sku_name: request.skuName,
     as_of_date: request.asOfDate,
     run_time: new Date().toISOString(),
+    // `sales_qty` carries the day's **signed net**, so a return day travels as
+    // a negative number and drags the level down. `return_qty` stays 0: the
+    // model never subtracts it from sales, and splitting a net return across
+    // both fields would count the same day twice.
     sku_daily: request.dailyTotals.map((day) => ({
       sku_id: request.skuId,
       sku_name: request.skuName,

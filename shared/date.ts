@@ -23,6 +23,12 @@ export function addLocalDays(date: Date, days: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
 
+// Is the 'YYYY-MM-DD' key later than today's local calendar day? Keys sort
+// lexicographically, so a plain string comparison is a date comparison.
+export function isFutureDateKey(key: string, now: Date = new Date()): boolean {
+  return key > localDateKey(now);
+}
+
 // Are two dates on the same local calendar day?
 export function sameLocalDay(a: Date, b: Date): boolean {
   return (

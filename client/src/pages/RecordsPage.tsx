@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import * as api from "../lib/api.ts";
+import { formatQuantity, isQuantity, parseQuantity } from "../../../shared/quantity.ts";
 import type { RecordEntry, RecordKind } from "../lib/types.ts";
 import { sumPendingByKind } from "../lib/status.ts";
 import { useProducts } from "../hooks/useProducts.ts";
@@ -79,6 +80,7 @@ export function RecordsPage() {
   const [added, setAdded] = useState<AddedItem[]>([]);
 
   const pending = sumPendingByKind(records);
+  const zeroWarning = parseQuantity(amount) === 0;
 
   const loadRecords = useCallback(async (productId: number) => {
     setRecordsError(null);
@@ -112,9 +114,10 @@ export function RecordsPage() {
     const rawProductId = searchParams.get("productId");
     const rawAmount = searchParams.get("amount");
     const productId = Number(rawProductId);
-    const draftAmount = Number(rawAmount);
+    const draftAmount = rawAmount === null ? Number.NaN : Number(rawAmount);
     const productExists = products.some((p) => p.id === productId);
-    const amountValid = Number.isSafeInteger(draftAmount) && draftAmount > 0;
+    // only a positive suggestion is worth drafting
+    const amountValid = isQuantity(draftAmount) && draftAmount > 0;
     if (!productExists || !amountValid) {
       setSearchParams({}, { replace: true });
       return;
@@ -126,9 +129,9 @@ export function RecordsPage() {
     setError(null);
     setAdded([]);
     setKind("PURCHASE");
-    setAmount(String(draftAmount));
+    setAmount(formatQuantity(draftAmount));
     setDraftNotice(
-      `已按销量预测的采购建议起草一笔购买记录（数量 ${draftAmount}），可修改数量后再添加`,
+      `已按销量预测的采购建议起草一笔购买记录（数量 ${formatQuantity(draftAmount)}），可修改数量后再添加`,
     );
     setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams, products, productsLoading]);
@@ -137,16 +140,16 @@ export function RecordsPage() {
     event.preventDefault();
     setError(null);
     if (!selected) return;
-    const value = Number(amount);
-    if (!Number.isSafeInteger(value) || value <= 0) {
-      setError("数量必须是大于 0 的整数");
+    const value = parseQuantity(amount);
+    if (value === null) {
+      setError("数量需为数字（最多 3 位小数），可填负数表示退货");
       return;
     }
     setBusy(true);
     try {
       const ok = await api.addRecord(selected, kind, value);
       if (!ok) {
-        setError("数量必须是大于 0 的整数");
+        setError("数量无效，请检查后重试");
         return;
       }
       setAdded((prev) => [{ id: Date.now(), kind, amount: value }, ...prev].slice(0, 8));
@@ -230,7 +233,7 @@ export function RecordsPage() {
                       <div key={k} className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2">
                         <p className="text-xs text-slate-400">{KIND_LABEL[k]}</p>
                         <p className="mt-0.5 font-semibold tabular-nums text-slate-800">
-                          {pending.byKind[k]}
+                          {formatQuantity(pending.byKind[k])}
                         </p>
                       </div>
                     ))}
@@ -280,16 +283,14 @@ export function RecordsPage() {
                   </div>
                 </fieldset>
 
-                <Field label="数量" hint="正整数，最小单位 1">
+                <Field label="数量" hint="最多 3 位小数；负数表示退货/冲销（如 -0.5）">
                   <div className="flex gap-2">
                     <Input
-                      type="number"
-                      min={1}
-                      step={1}
-                      inputMode="numeric"
+                      type="text"
+                      inputMode="decimal"
                       value={amount}
                       onChange={(e) => setAmount(e.target.value)}
-                      placeholder="例如：50"
+                      placeholder="例如：50、0.5 或 -2"
                       className="max-w-xs"
                       autoFocus
                     />
@@ -298,6 +299,13 @@ export function RecordsPage() {
                       添加
                     </Button>
                   </div>
+                  {zeroWarning && (
+                    <div className="mt-2">
+                      <InlineMessage tone="info">
+                        数量为 0：记录会保存，但不影响库存与预测。
+                      </InlineMessage>
+                    </div>
+                  )}
                 </Field>
                 {error && <InlineMessage tone="error">{error}</InlineMessage>}
               </form>
@@ -321,7 +329,9 @@ export function RecordsPage() {
                       <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
                       <RecordBadge kind={item.kind} />
                       <span className="flex-1 text-slate-400">{KIND_DESC[item.kind]}</span>
-                      <span className="font-semibold tabular-nums text-slate-800">{item.amount}</span>
+                      <span className="font-semibold tabular-nums text-slate-800">
+                        {formatQuantity(item.amount)}
+                      </span>
                     </li>
                   ))}
                 </ul>

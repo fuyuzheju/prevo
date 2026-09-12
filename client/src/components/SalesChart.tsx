@@ -7,13 +7,32 @@ import {
   TooltipComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
-import type { SalesDay } from "../lib/types.ts";
+import type { Granularity, SeriesPoint } from "../lib/series.ts";
+import { formatQuantity } from "../../../shared/quantity.ts";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer]);
 
 type ChartInstance = ReturnType<typeof echarts.init>;
 
-export function SalesChart({ series, height = 320 }: { series: readonly SalesDay[]; height?: number }) {
+const GRANULARITY_LABEL: Record<Granularity, string> = { day: "天", week: "周", month: "月" };
+
+// The axis tooltip is handed the raw echarts params; only the dataIndex of the
+// first entry is needed to look up the aggregated point.
+function dataIndexOf(params: unknown): number | null {
+  if (typeof params !== "object" || params === null || !("dataIndex" in params)) return null;
+  const value = params.dataIndex;
+  return typeof value === "number" ? value : null;
+}
+
+export function SalesChart({
+  points,
+  granularity,
+  height = 320,
+}: {
+  points: readonly SeriesPoint[];
+  granularity: Granularity;
+  height?: number;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
 
@@ -39,19 +58,31 @@ export function SalesChart({ series, height = 320 }: { series: readonly SalesDay
       grid: { left: 12, right: 16, top: 24, bottom: 8, containLabel: true },
       tooltip: {
         trigger: "axis",
-        valueFormatter: (value: unknown) => String(value),
+        formatter: (params: unknown) => {
+          const index = dataIndexOf(params);
+          const point = index === null ? undefined : points[index];
+          if (point === undefined) return "";
+          // values are fixed-point quantities; show the user-facing decimal
+          const heading =
+            granularity === "day" ? point.range : `${point.range}（共 ${point.days} 天）`;
+          return `${heading}<br/>销量 ${formatQuantity(point.sale)}`;
+        },
       },
       xAxis: {
         type: "category",
         boundaryGap: false,
-        data: series.map((day) => day.date.slice(5)), // MM-DD
+        data: points.map((point) => point.label),
         axisLine: { lineStyle: { color: "#cbd5e1" } },
         axisLabel: { color: "#94a3b8", fontSize: 11 },
       },
       yAxis: {
         type: "value",
         minInterval: 1,
-        axisLabel: { color: "#94a3b8", fontSize: 11 },
+        axisLabel: {
+          color: "#94a3b8",
+          fontSize: 11,
+          formatter: (value: number) => formatQuantity(value),
+        },
         splitLine: { lineStyle: { color: "#f1f5f9" } },
       },
       dataZoom: [
@@ -65,8 +96,8 @@ export function SalesChart({ series, height = 320 }: { series: readonly SalesDay
           smooth: true,
           symbol: "circle",
           symbolSize: 5,
-          showSymbol: series.length <= 40,
-          data: series.map((day) => day.sale),
+          showSymbol: points.length <= 40,
+          data: points.map((point) => point.sale),
           lineStyle: { width: 2.5, color: "#2563eb" },
           itemStyle: { color: "#2563eb" },
           areaStyle: {
@@ -85,13 +116,13 @@ export function SalesChart({ series, height = 320 }: { series: readonly SalesDay
         },
       ],
     });
-  }, [series]);
+  }, [points, granularity]);
 
   return (
     <div
       ref={containerRef}
       role="img"
-      aria-label="每日销量折线图，滚轮可缩放"
+      aria-label={`销量折线图（按${GRANULARITY_LABEL[granularity]}汇总），滚轮 / 拖拽底部滑块可缩放`}
       style={{ height }}
       className="w-full"
     />

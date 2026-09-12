@@ -1,7 +1,13 @@
 import { db, type DbClient } from "../db.js";
 import { ApiError } from "../errors.js";
-import { isQuantity, isValidProductName, type Scope } from "../../../shared/model.ts";
-import { addLocalDays, localDateKey, parseLocalDateKey } from "../../../shared/date.ts";
+import { isValidProductName, type Scope } from "../../../shared/model.ts";
+import { isQuantity } from "../../../shared/quantity.ts";
+import {
+  addLocalDays,
+  isFutureDateKey,
+  localDateKey,
+  parseLocalDateKey,
+} from "../../../shared/date.ts";
 
 // Imported historical sales are a prediction-only dataset: they never touch
 // the state machine, the ledger or the live position. Real orders (SELL
@@ -57,8 +63,12 @@ function assertRows(entries: unknown): { date: string; amount: number; productTy
     if (!DATE_KEY_RE.test(key) || localDateKey(parsed) !== key) {
       throw new ApiError(400, "INVALID_DATE", `invalid date "${key}", expected YYYY-MM-DD`);
     }
+    // future days would extend the prediction series past today
+    if (isFutureDateKey(key)) {
+      throw new ApiError(400, "INVALID_DATE", `date "${key}" is in the future`);
+    }
     if (!isQuantity(amountRaw)) {
-      throw new ApiError(400, "INVALID_AMOUNT", "amount must be a positive integer");
+      throw new ApiError(400, "INVALID_AMOUNT", "amount must be an integer number of 1/1000 units");
     }
     return { productType, date: key, amount: amountRaw };
   });
@@ -204,12 +214,13 @@ export async function buildDailySalesSeries(
   }
   if (!earliest) return [];
 
-  const todayStart = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+  // earliest is a raw timestamp (a SELL createdAt can be mid-day); normalize
+  // to its local midnight, or a same-day-only history would start after today
+  // and produce an empty series.
+  const firstDay = addLocalDays(earliest, 0);
+  const todayStart = addLocalDays(new Date(), 0);
   const series: SalesDay[] = [];
-  // Start from local midnight of the earliest day: a real order carries a full
-  // timestamp, and comparing that against today's midnight would drop the whole
-  // range whenever every record happens to be from today.
-  for (let day = addLocalDays(earliest, 0); day <= todayStart; day = addLocalDays(day, 1)) {
+  for (let day = firstDay; day <= todayStart; day = addLocalDays(day, 1)) {
     const key = localDateKey(day);
     series.push(byKey.get(key) ?? { date: key, real: 0, imported: 0, sale: 0 });
   }

@@ -116,10 +116,26 @@ describe("persisted state machine", () => {
 describe("input validation at the data layer", () => {
   beforeEach(truncateAll);
 
-  it("rejects negative cycle inputs", async () => {
+  it("accepts negative and zero cycle inputs (returns / corrections)", async () => {
+    const scope = await createScope();
+    await advanceCycle(scope, { sent: 0, received: 10, sale: 4, purchase: 10 });
+    const s2 = await advanceCycle(scope, { sent: 0, received: -3, sale: -1, purchase: -3 });
+    expect(s2).toMatchObject({
+      cycle: 2,
+      inventory: 7,
+      soldTransit: 3,
+      boughtTransit: 0,
+      received: -3,
+      sale: -1,
+      purchase: -3,
+    });
+  });
+
+  it("rejects non-integer cycle inputs", async () => {
     const scope = await createScope();
     await expect(
-      advanceCycle(scope, { sent: -1, received: 0, sale: 0, purchase: 0 }),
-    ).rejects.toThrow(ApiError);
+      advanceCycle(scope, { sent: 0.5, received: 0, sale: 0, purchase: 0 }),
+    ).rejects.toBeInstanceOf(ApiError);
+    expect(await listStates(scope)).toHaveLength(0);
   });
 });

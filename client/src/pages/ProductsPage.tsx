@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { isValidProductName } from "../../../shared/model.ts";
+import { formatQuantity, parseQuantity } from "../../../shared/quantity.ts";
 import * as api from "../lib/api.ts";
 import type { ImportedSaleItem } from "../lib/types.ts";
 import { formatDate } from "../lib/format.ts";
@@ -43,6 +44,7 @@ export function ProductsPage() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importOk, setImportOk] = useState<string | null>(null);
+  const [confirmCreate, setConfirmCreate] = useState(false);
 
   // ---- imported entries management (keyed by product id) ----
   const [importedByProduct, setImportedByProduct] = useState<Record<number, ImportedSaleItem[]>>({});
@@ -99,35 +101,64 @@ export function ProductsPage() {
     );
   }, [parsed, knownSet]);
 
-  const importableCount = parsed ? parsed.entries.filter((e) => knownSet.has(e.productType)).length : 0;
-  const hasBlockers = parsed !== null && (parsed.errors.length > 0 || unknownNames.size > 0);
+  const importableCount = parsed?.entries.length ?? 0;
+  // Row errors block the whole import (the file must be fixed); unknown
+  // products do not — they are created after the user confirms.
+  const hasRowErrors = parsed !== null && parsed.errors.length > 0;
 
   async function handleFile(file: File) {
     setPickedName(file.name);
     setParsed(null);
     setImportError(null);
     setImportOk(null);
+    setConfirmCreate(false);
     setParsing(true);
     try {
       setParsed(await parseSalesSheetFile(file));
     } catch {
-      setParsed({ entries: [], errors: ["无法读取该文件，请确认为 .xlsx / .xls / .csv 格式"] });
+      setParsed({
+        entries: [],
+        errors: ["无法读取该文件，请确认为 .xlsx / .xls / .csv 格式"],
+        warnings: [],
+      });
     } finally {
       setParsing(false);
     }
   }
 
+  // A stale product list (another tab created the product meanwhile) must not
+  // fail the import: PRODUCT_EXISTS means the product is already there.
+  async function createProductIfMissing(productType: string): Promise<void> {
+    try {
+      await api.createProduct(productType);
+    } catch (error) {
+      if (!(error instanceof api.ApiError) || error.code !== "PRODUCT_EXISTS") throw error;
+    }
+  }
+
   async function handleImport() {
     if (!parsed || importableCount === 0) return;
-    const rows = parsed.entries.filter((e) => knownSet.has(e.productType));
     setImporting(true);
     setImportError(null);
     setImportOk(null);
     try {
-      const count = await api.importSalesMany(rows);
-      setImportOk(`已导入 ${count} 条销量记录`);
+      const missing = [...unknownNames];
+      const invalid = missing.filter((productName) => !isValidProductName(productName));
+      if (invalid.length > 0) {
+        setImportError(`商品名无效（应为 1-40 个字符，不含空白）：${invalid.join("、")}`);
+        return;
+      }
+      await Promise.all(missing.map((productName) => createProductIfMissing(productName)));
+      const created = missing.length > 0 ? await reload() : products;
+      const count = await api.importSalesMany(parsed.entries);
+      setImportOk(
+        missing.length > 0
+          ? `已导入 ${count} 条销量记录，并新建了 ${missing.length} 个商品`
+          : `已导入 ${count} 条销量记录`,
+      );
+      setConfirmCreate(false);
       resetPicked();
-      await loadImported(productIds);
+      await loadImported(created.map((p) => p.id));
     } catch (err) {
       setImportError(api.errorMessage(err));
     } finally {
@@ -141,10 +172,12 @@ export function ProductsPage() {
     if (fileRef.current) fileRef.current.value = "";
   };
 
+  // The scaled multiple, undefined for "no constraint" (empty input), or NaN
+  // when invalid. 0.001 (1 scaled) is the smallest allowed multiple.
   function parseOrderMultiple(raw: string): number | undefined {
-    if (raw.trim() === "") return undefined; // 1 = no constraint
-    const value = Number(raw);
-    if (!Number.isSafeInteger(value) || value < 1) return Number.NaN;
+    if (raw.trim() === "") return undefined;
+    const value = parseQuantity(raw);
+    if (value === null || value < 1) return Number.NaN;
     return value;
   }
 
@@ -162,8 +195,8 @@ export function ProductsPage() {
       return;
     }
     const orderMultiple = parseOrderMultiple(orderMultipleInput);
-    if (orderMultiple === Number.NaN) {
-      setAddError("起订点需为大于等于 1 的整数");
+    if (Number.isNaN(orderMultiple)) {
+      setAddError("起订点需为大于 0 的数字（最多 3 位小数）");
       return;
     }
     setAdding(true);
@@ -195,8 +228,8 @@ export function ProductsPage() {
       return;
     }
     const multiple = parseOrderMultiple(editing.multiple);
-    if (multiple === Number.NaN) {
-      setEditingError("起订点需为大于等于 1 的整数");
+    if (Number.isNaN(multiple)) {
+      setEditingError("起订点需为大于 0 的数字（最多 3 位小数）");
       return;
     }
     setEditingSaving(true);
@@ -303,15 +336,13 @@ export function ProductsPage() {
                   placeholder="例如：夏季T恤"
                 />
               </Field>
-              <Field label="起订点" hint="正整数；1 = 不限制">
+              <Field label="起订点" hint="数字，最多 3 位小数；留空 = 不限制">
                 <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  inputMode="numeric"
+                  type="text"
+                  inputMode="decimal"
                   value={orderMultipleInput}
                   onChange={(e) => setOrderMultipleInput(e.target.value)}
-                  placeholder="1"
+                  placeholder="留空不限制"
                 />
               </Field>
               <Button type="submit" loading={adding} className="shrink-0">
@@ -350,7 +381,8 @@ export function ProductsPage() {
                     <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs tabular-nums text-slate-400">
                       ID #{product.id} · 创建于 {formatDate(product.createdAt)}
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
-                        起订点 {product.orderMultiple === 1 ? "不限" : product.orderMultiple}
+                        起订点{" "}
+                        {product.orderMultiple === 1 ? "不限" : formatQuantity(product.orderMultiple)}
                       </span>
                     </p>
                   </div>
@@ -398,7 +430,8 @@ export function ProductsPage() {
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               一张表可包含多种商品：每行 = 商品 | 日期 | 数量（表头名可不同，其余列忽略）。
-              仅用于预测，不影响库存与状态机；真实出售记录会自动计入。表里出现不存在的商品时该行不会导入。
+              仅用于预测，不影响库存与状态机；真实出售记录会自动计入。表里出现不存在的商品时会先提示，
+              确认导入后按默认起订点自动创建；有任何一行数据错误时整批都不会导入。
             </p>
           </div>
           <div className="space-y-4 p-5">
@@ -428,27 +461,33 @@ export function ProductsPage() {
                   <p className="text-sm font-medium text-slate-700">
                     {pickedName}：{parsed.entries.length === 0 ? "没有可导入的行" : `可导入 ${importableCount} 条`}
                     {unknownNames.size > 0 && (
-                      <span className="text-amber-600">（{unknownNames.size} 个商品不存在）</span>
+                      <span className="text-amber-600">（{unknownNames.size} 个商品待创建）</span>
                     )}
                     {parsed.errors.length > 0 && <span className="text-amber-600">（{parsed.errors.length} 行错误）</span>}
                   </p>
                   <Button
-                    disabled={importableCount === 0 || hasBlockers}
+                    disabled={importableCount === 0 || hasRowErrors}
                     loading={importing}
-                    onClick={() => void handleImport()}
+                    onClick={() => {
+                      if (unknownNames.size > 0) setConfirmCreate(true);
+                      else void handleImport();
+                    }}
                   >
                     <Upload className="size-4" />
                     确认导入{importableCount > 0 ? ` ${importableCount} 条` : ""}
                   </Button>
                 </div>
 
-                {hasBlockers && (
+                {hasRowErrors && (
                   <InlineMessage tone="error">
-                    请先处理下列问题后再导入：不存在的商品请先在下方「新增商品」中创建；
-                    {unknownNames.size > 0 && (
-                      <span className="mt-1 block">商品不存在：{[...unknownNames].join("、")}</span>
-                    )}
+                    文件存在下列问题，修正后重新选择文件再导入。
                   </InlineMessage>
+                )}
+                {unknownNames.size > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                    以下商品还没有创建：{[...unknownNames].join("、")}。
+                    确认导入时会自动创建这些商品（起订点默认不限），再导入它们的记录。
+                  </div>
                 )}
                 {importError && <InlineMessage tone="error">{importError}</InlineMessage>}
                 {importOk && <InlineMessage tone="success">{importOk}</InlineMessage>}
@@ -474,6 +513,13 @@ export function ProductsPage() {
                   <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
                     {parsed.errors.map((err, index) => (
                       <p key={index}>{err}</p>
+                    ))}
+                  </div>
+                )}
+                {parsed.warnings.length > 0 && (
+                  <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-700">
+                    {parsed.warnings.map((warning, index) => (
+                      <p key={index}>{warning}</p>
                     ))}
                   </div>
                 )}
@@ -539,7 +585,7 @@ export function ProductsPage() {
                         </td>
                         <td className="px-4 py-2.5 tabular-nums">{formatDate(entry.date)}</td>
                         <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-slate-800">
-                          {entry.amount}
+                          {formatQuantity(entry.amount)}
                         </td>
                         <td className="px-5 py-2.5 text-right">
                           <button
@@ -583,12 +629,10 @@ export function ProductsPage() {
                   onChange={(e) => setEditing({ ...editing, name: e.target.value })}
                 />
               </Field>
-              <Field label="起订点" hint="正整数；1 = 不限制">
+              <Field label="起订点" hint="数字，最多 3 位小数；留空 = 不限制">
                 <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  inputMode="numeric"
+                  type="text"
+                  inputMode="decimal"
                   value={editing.multiple}
                   onChange={(e) => setEditing({ ...editing, multiple: e.target.value })}
                 />
@@ -605,6 +649,23 @@ export function ProductsPage() {
             </div>
           </Card>
         </div>
+      )}
+
+      {confirmCreate && parsed && (
+        <ConfirmDialog
+          title={`创建 ${unknownNames.size} 个新商品并导入？`}
+          confirmLabel="创建并导入"
+          busy={importing}
+          onCancel={() => {
+            setConfirmCreate(false);
+            setImportError(null);
+          }}
+          onConfirm={() => void handleImport()}
+        >
+          商品 {[...unknownNames].join("、")} 还不存在，将按默认起订点
+          （不限制）创建，然后导入全部 {importableCount} 条记录。
+          {importError && <span className="mt-2 block text-rose-600">{importError}</span>}
+        </ConfirmDialog>
       )}
 
       {pendingDelete !== null && target && (

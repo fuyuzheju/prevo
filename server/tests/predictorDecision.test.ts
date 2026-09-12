@@ -5,7 +5,7 @@ import { decidePurchase } from "../src/modules/decision.js";
 import { importSales } from "../src/modules/salesHistory.js";
 import { advanceCycle } from "../src/modules/stateMachine.js";
 import { addLocalDays } from "../../shared/date.ts";
-import { createScope, mustDefined, truncateAll } from "./helpers.js";
+import { createScope, mustDefined, q, truncateAll } from "./helpers.js";
 
 function localKeyOf(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -82,6 +82,12 @@ describe("forecastNext14Days", () => {
     const flipped = await forecastNext14Days(requestFor(reversed));
     expect(flipped.dailyRate).toBeLessThan(handComputed);
   });
+
+  it("treats a return day (negative total) as negative sales", async () => {
+    const forecast = await forecastNext14Days(requestFor([q(20), -q(10)]));
+    expect(forecast.dailyRate).toBeCloseTo(q(5));
+    expect(forecast.predictedTotal).toBe(q(70));
+  });
 });
 
 describe("decidePurchase", () => {
@@ -110,6 +116,19 @@ describe("decidePurchase", () => {
     expect(decision.series).toHaveLength(3);
     expect(mustDefined(decision.series[0], "series day 0").imported).toBe(20);
     expect(mustDefined(decision.series[2], "series last day").real).toBe(10);
+  });
+
+  it("forecasts from a same-day-only sell (one-day window, not an empty series)", async () => {
+    const scope = await createScope();
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 10, cycle: null, createdAt: new Date() },
+    });
+
+    const decision = await decidePurchase(scope);
+    expect(decision.forecast.windowDays).toBe(1);
+    expect(decision.safetyStock).toBe(140); // 10 / 1 day × 14
+    expect(decision.available).toBe(-10);
+    expect(decision.suggestedAmount).toBe(150); // 140 - (-10)
   });
 
   it("recommends nothing when available covers the safety stock", async () => {

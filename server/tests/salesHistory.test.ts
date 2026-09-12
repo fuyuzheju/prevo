@@ -15,6 +15,7 @@ import {
   createScope,
   createUser,
   mustDefined,
+  q,
   scopeFor,
   truncateAll,
 } from "./helpers.js";
@@ -38,8 +39,7 @@ describe("importSales validation", () => {
       { entries: [{ date: "2026-13-01", amount: 5 }] },
       { entries: [{ date: "2026-02-30", amount: 5 }] }, // rolls over to March
       { entries: [{ date: "2026/08/01", amount: 5 }] },
-      { entries: [{ date: daysAgo(1), amount: 0 }] },
-      { entries: [{ date: daysAgo(1), amount: -3 }] },
+      { entries: [{ date: daysAgo(-1), amount: 5 }] }, // tomorrow
       { entries: [{ date: daysAgo(1), amount: 1.5 }] },
     ]) {
       await expect(importSales(scope, bad.entries)).rejects.toBeInstanceOf(ApiError);
@@ -61,6 +61,18 @@ describe("importSales validation", () => {
     expect(mustDefined(entries[1], "entry 1").date).toBe(daysAgo(1));
     expect(mustDefined(entries[2], "entry 2").date).toBe(daysAgo(3));
     expect(entries.map((e) => e.amount).sort((a, b) => b - a)).toEqual([25, 10, 5]);
+  });
+
+  it("imports decimal, zero and return (negative) amounts", async () => {
+    const scope = await createScope();
+    const count = await importSales(scope, [
+      { date: daysAgo(2), amount: q(0.5) },
+      { date: daysAgo(1), amount: 0 },
+      { date: daysAgo(1), amount: -q(3) },
+    ]);
+    expect(count).toBe(3);
+    const entries = await listImported(scope);
+    expect(entries.map((e) => e.amount).sort((a, b) => a - b)).toEqual([-q(3), 0, q(0.5)]);
   });
 });
 
@@ -92,16 +104,28 @@ describe("buildDailySalesSeries", () => {
     expect(series.reduce((sum, day) => sum + day.sale, 0)).toBe(42);
   });
 
-  it("still spans today when the only sale happened today", async () => {
+  it("lets a return day pull the daily total down (negative sale)", async () => {
     const scope = await createScope();
-    // A real order carries a full timestamp, not a midnight. Comparing that
-    // timestamp against today's midnight must not push the whole series out of
-    // range, or a brand-new product looks like it has no data at all.
+    await importSales(scope, [{ date: daysAgo(1), amount: q(5) }]);
     await db.scopeRecord.create({
-      data: { ...scope, kind: "SELL", amount: 12, cycle: null, createdAt: new Date() },
+      data: { ...scope, kind: "SELL", amount: -q(2), cycle: null, createdAt: addLocalDays(new Date(), -1) },
     });
     const series = await buildDailySalesSeries(scope);
-    expect(series).toEqual([{ date: daysAgo(0), real: 12, imported: 0, sale: 12 }]);
+    expect(series).toHaveLength(2);
+    const returnDay = mustDefined(series[0], "return day");
+    expect(returnDay.date).toBe(daysAgo(1));
+    expect(returnDay.real).toBe(-q(2));
+    expect(returnDay.imported).toBe(q(5));
+    expect(returnDay.sale).toBe(q(3));
+  });
+
+  it("keeps a same-day sell in the series instead of returning nothing", async () => {
+    const scope = await createScope();
+    await db.scopeRecord.create({
+      data: { ...scope, kind: "SELL", amount: 10, cycle: null, createdAt: new Date() },
+    });
+    const series = await buildDailySalesSeries(scope);
+    expect(series).toEqual([{ date: daysAgo(0), real: 10, imported: 0, sale: 10 }]);
   });
 
   it("returns an empty series without any data and isolates scopes", async () => {
@@ -154,8 +178,9 @@ describe("importSalesMany (multi-product)", () => {
     for (const bad of [
       { productType: "has space", date: daysAgo(1), amount: 5 },
       { productType: "tee", date: "2026-02-30", amount: 5 },
-      { productType: "tee", date: daysAgo(1), amount: 0 },
+      { productType: "tee", date: daysAgo(-1), amount: 5 }, // tomorrow
       { productType: "tee", date: daysAgo(1), amount: 2.5 },
+      { productType: "tee", date: daysAgo(1), amount: 1.2345 },
     ]) {
       await expect(importSalesMany(userId, [bad])).rejects.toBeInstanceOf(ApiError);
     }

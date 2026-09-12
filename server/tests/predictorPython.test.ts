@@ -121,9 +121,12 @@ const ADAPTER_PAYLOAD = {
   sku_daily: [ADAPTER_ROW],
 };
 
-function runAdapter(row: Record<string, unknown> = {}): AdapterResponse {
+function runAdapter(rows: Record<string, unknown>[] = [{}]): AdapterResponse {
   const result = spawnSync(process.env.PREDICTOR_PYTHON ?? "python", [MAIN_PY], {
-    input: JSON.stringify({ ...ADAPTER_PAYLOAD, sku_daily: [{ ...ADAPTER_ROW, ...row }] }),
+    input: JSON.stringify({
+      ...ADAPTER_PAYLOAD,
+      sku_daily: rows.map((row) => ({ ...ADAPTER_ROW, ...row })),
+    }),
     encoding: "utf8",
     env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
   });
@@ -149,16 +152,38 @@ describe("the adapter's request validation", () => {
     expect(record?.["forecast_14d"]).toBeCloseTo((4 / 3) * 14, 12);
   });
 
-  it("refuses a negative daily total instead of letting it lower the level", () => {
-    expectRejection(runAdapter({ sales_qty: -4 }), /sales_qty must not be negative/);
+  it("accepts a negative daily total and lets it pull the level down", () => {
+    // Two contiguous days ending at the cutoff: (20 − 10) / 2 days = 5 per day.
+    const response = runAdapter([
+      { date: "2026-01-09", sales_qty: 20 },
+      { date: "2026-01-10", sales_qty: -10 },
+    ]);
+    expect(response.ok).toBe(true);
+    const record = response.predictions?.[0];
+    expect(record?.["history_days"]).toBe(2);
+    expect(record?.["effective_n"]).toBe(2);
+    expect(record?.["level"]).toBeCloseTo(5, 12);
+    expect(record?.["forecast_14d"]).toBeCloseTo(70, 12);
+  });
+
+  it("clamps a series with no positive day to the ALL_ZERO record", () => {
+    // Returns only, so there is no positive demand to extrapolate: the level
+    // stays 0 instead of turning into a negative purchase need.
+    const response = runAdapter([{ sales_qty: -4 }]);
+    expect(response.ok).toBe(true);
+    const record = response.predictions?.[0];
+    expect(record?.["history_days"]).toBe(3);
+    expect(record?.["level"]).toBe(0);
+    expect(record?.["model_id"]).toBe("ALL_ZERO");
+    expect(record?.["forecast_14d"]).toBe(0);
   });
 
   it("refuses a return quantity that is not a number", () => {
-    expectRejection(runAdapter({ return_qty: "abc" }), /return_qty must be a number/);
+    expectRejection(runAdapter([{ return_qty: "abc" }]), /return_qty must be a number/);
   });
 
   it("refuses an is_imputed_zero that is not a real boolean", () => {
     // The string "false" is truthy; coercing it would hide a real trading day.
-    expectRejection(runAdapter({ is_imputed_zero: "false" }), /is_imputed_zero must be a boolean/);
+    expectRejection(runAdapter([{ is_imputed_zero: "false" }]), /is_imputed_zero must be a boolean/);
   });
 });

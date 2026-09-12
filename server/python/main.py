@@ -22,8 +22,10 @@ Request (stdin, UTF-8 JSON):
       ]
     }
 
-`sales_qty` must be a finite, non-negative number and `is_imputed_zero` a real
-boolean; anything else is refused as `INVALID_REQUEST` rather than coerced.
+`sales_qty` is the day's **signed net** sales: it must be a finite number and is
+allowed to be negative (a return day, which has to pull the level down rather
+than being dropped), and `is_imputed_zero` must be a real boolean; anything else
+is refused as `INVALID_REQUEST` rather than coerced.
 
 Response (stdout, UTF-8 JSON), success — `predictions` holds one record per the
 deployment spec's 13 output columns, plus one adapter-added field:
@@ -109,10 +111,10 @@ def _build_sku_daily(rows: object) -> pd.DataFrame:
     for index, row in enumerate(rows):
         _require(isinstance(row, dict), f"sku_daily[{index}] must be an object")
         sales_qty = _number(row, "sales_qty", index)
-        # The SKU-Day contract promises `sales_qty >= 0`. A negative day would
-        # quietly drag the level down instead of being reported.
-        _require(sales_qty >= 0,
-                 f"sku_daily[{index}].sales_qty must not be negative")
+        # `sales_qty` is deliberately allowed to be negative: the caller sends
+        # the day's signed net, so a return day has to pull the level down
+        # instead of being dropped or parked in `return_qty` — the model never
+        # subtracts `return_qty` from sales.
         imputed = row.get("is_imputed_zero")
         # Truthiness is not enough here: the string "false" is truthy, and this
         # flag decides whether the day counts as a real trading day.

@@ -2,19 +2,19 @@ import { db } from "../db.js";
 import { ApiError } from "../errors.js";
 import { advanceCycle } from "./stateMachine.js";
 import {
-  isQuantity,
   isRecordKind,
   type CycleInput,
   type RecordKind,
   type Scope,
-  type StateSnapshot,
 } from "../../../shared/model.ts";
+import { isQuantity } from "../../../shared/quantity.ts";
 import { addLocalDays } from "../../../shared/date.ts";
 import type { Prisma } from "../../generated/prisma/client.js";
 
-// Records land on the current (pending) cycle of the scope. summarize() folds
-// every pending record into a new state machine snapshot and marks the
-// records with that cycle; records are kept forever (the ledger).
+// Records land on the current (pending) cycle of the scope. Settlement folds
+// pending records into a new state machine snapshot and marks the records
+// with that cycle; records are kept forever (the ledger). Settlement is
+// driven exclusively by the daily job (see the section at the bottom).
 
 interface SummaryDb {
   cycleState: Prisma.CycleStateDelegate;
@@ -32,17 +32,19 @@ export async function addRecord(
   client: SummaryDb = db,
 ): Promise<void> {
   if (!isQuantity(amount)) {
-    throw new ApiError(400, "INVALID_AMOUNT", "amount must be a positive integer");
+    throw new ApiError(400, "INVALID_AMOUNT", "amount must be an integer number of 1/1000 units");
   }
   await client.scopeRecord.create({ data: { ...scopeWhere(scope), kind, amount } });
 }
 
 
 // purchase returns false instead of throwing on an invalid amount, so the
-// caller can react to a rejected purchase bill.
+// caller can react to a rejected purchase bill. The raw body value is passed
+// through as unknown because 0 is valid now, so "invalid" can no longer be
+// represented by a sentinel amount.
 export async function purchase(
   scope: Scope,
-  amount: number,
+  amount: unknown,
   client: SummaryDb = db,
 ): Promise<boolean> {
   if (!isQuantity(amount)) return false;
@@ -68,43 +70,6 @@ const KIND_TO_INPUT: Record<RecordKind, keyof CycleInput> = {
   SEND: "sent",
   RECEIVE: "received",
 };
-
-export type SummarizeClient = SummaryDb & { $transaction?: (fn: (tx: SummaryDb) => Promise<StateSnapshot | null>) => Promise<StateSnapshot | null> };
-
-// End of the cycle: aggregate all pending records of the scope into the four
-// state machine inputs, append the next snapshot and mark the records with
-// the new cycle (they are never deleted). Returns the new snapshot, or null
-// when there was nothing to summarize.
-export async function summarize(
-  scope: Scope,
-  client: SummarizeClient = db,
-): Promise<StateSnapshot | null> {
-  const run = async (tx: SummaryDb): Promise<StateSnapshot | null> => {
-    const grouped = await tx.scopeRecord.groupBy({
-      by: ["kind"],
-      where: { ...scopeWhere(scope), cycle: null },
-      _sum: { amount: true },
-    });
-    const input: CycleInput = { sale: 0, purchase: 0, sent: 0, received: 0 };
-    for (const group of grouped) {
-      if (isRecordKind(group.kind)) {
-        input[KIND_TO_INPUT[group.kind]] = group._sum.amount ?? 0;
-      }
-    }
-    if (grouped.length === 0) return null;
-    const snapshot = await advanceCycle(scope, input, tx);
-    await tx.scopeRecord.updateMany({
-      where: { ...scopeWhere(scope), cycle: null },
-      data: { cycle: snapshot.cycle },
-    });
-    return snapshot;
-  };
-
-  if (client.$transaction) {
-    return client.$transaction(run);
-  }
-  return run(client);
-}
 
 export interface ScopeRecordEntry {
   id: number;

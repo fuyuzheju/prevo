@@ -9,8 +9,9 @@ export interface Scope {
   productId: number;
 }
 
-// Snapshot of one completed cycle (docs/state.md). All amounts are
-// quantities stored as integers (minimum unit 1); money is not modeled yet.
+// Snapshot of one completed cycle (docs/state.md). All amounts are fixed-point
+// quantities: integers in 1/QUANTITY_SCALE units (see shared/quantity.ts),
+// signed (negative reverses the flow), 0 allowed. Money is not modeled yet.
 export interface StateSnapshot {
   cycle: number;
   inventory: number; // inventory until end of the cycle
@@ -22,7 +23,7 @@ export interface StateSnapshot {
   purchase: number; // all bought during the cycle
 }
 
-// The four whole-cycle aggregates fed into the state machine at summarize().
+// The four whole-cycle aggregates fed into the state machine at settlement.
 export interface CycleInput {
   sent: number;
   received: number;
@@ -40,10 +41,6 @@ export type RecordKind = (typeof RECORD_KINDS)[number];
 
 export function isRecordKind(value: string): value is RecordKind {
   return RECORD_KINDS.some((kind) => kind === value);
-}
-
-export function isQuantity(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 export function isValidProductName(value: unknown): value is string {
@@ -68,6 +65,8 @@ export interface TransitPosition {
 //   receive moves goods into inventory and settles part of the transit;
 //   send ships goods out of inventory and settles part of soldTransit;
 //   purchase adds to boughtTransit, sell adds to soldTransit.
+// A negative amount reverses its line (returns / corrections); no special
+// cases, the formulas stay linear.
 export function applyPendingToPosition(
   base: TransitPosition,
   pendingByKind: Record<RecordKind, number>,

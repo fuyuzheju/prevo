@@ -9,6 +9,7 @@ import {
   Wallet,
 } from "lucide-react";
 import * as api from "../lib/api.ts";
+import { formatQuantity } from "../../../shared/quantity.ts";
 import type { RecordEntry, StateSnapshot } from "../lib/types.ts";
 import { computeLiveStatus } from "../lib/status.ts";
 import { useProducts } from "../hooks/useProducts.ts";
@@ -217,7 +218,7 @@ export function QueryPage() {
                             )}
                           </td>
                           <td className="px-5 py-3 text-right font-semibold tabular-nums text-slate-900">
-                            {record.amount}
+                            {formatQuantity(record.amount)}
                           </td>
                         </tr>
                       ))}
@@ -273,13 +274,21 @@ function ProductCard({
           <div className="px-5 py-4">
             <p className="text-xs text-slate-400">当前库存</p>
             <p className="mt-0.5 text-3xl font-bold tabular-nums text-slate-900">
-              {live.inventory}
+              {formatQuantity(live.inventory)}
             </p>
           </div>
           <div className="grid grid-cols-3 divide-x divide-slate-100 border-t border-slate-100">
-            <StatTile icon={Wallet} label="可用量" value={live.available} accent />
-            <StatTile icon={ArrowDownToLine} label="已售未发" value={live.soldTransit} />
-            <StatTile icon={ArrowUpFromLine} label="采购在途" value={live.boughtTransit} />
+            <StatTile icon={Wallet} label="可用量" value={formatQuantity(live.available)} accent />
+            <StatTile
+              icon={ArrowDownToLine}
+              label="已售未发"
+              value={formatQuantity(live.soldTransit)}
+            />
+            <StatTile
+              icon={ArrowUpFromLine}
+              label="采购在途"
+              value={formatQuantity(live.boughtTransit)}
+            />
           </div>
           <div className="flex items-center gap-1.5 border-t border-slate-100 bg-slate-50/60 px-5 py-2 text-xs text-slate-400">
             <PackageCheck className="size-3.5 shrink-0" />
@@ -299,7 +308,7 @@ function StatTile({
 }: {
   icon: typeof Wallet;
   label: string;
-  value: number;
+  value: string;
   accent?: boolean;
 }) {
   return (

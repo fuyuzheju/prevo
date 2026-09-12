@@ -18,40 +18,49 @@ function writeSample(file: string, rows: unknown[][]) {
 }
 
 // ---- clean sample: 4 products over ~17 days (early Aug..early Sep 2026) ----
-interface Row {
-  p: string;
-  d: string;
-  a: number | string; // string like "1,200" exercises thousands parsing
-}
+// [product, date, amount]; a string amount like "1,200" exercises thousands parsing
+type Row = [string, string, number | string];
 const plan: Row[] = [
   // 夏季T恤: near-daily, larger numbers
   ["夏季T恤", "2026-08-20", 120], ["夏季T恤", "2026-08-21", 95], ["夏季T恤", "2026-08-22", 140],
   ["夏季T恤", "2026-08-24", 88], ["夏季T恤", "2026-08-25", 110], ["夏季T恤", "2026-08-26", "160"],
   ["夏季T恤", "2026-08-28", 132], ["夏季T恤", "2026-08-30", 76], ["夏季T恤", "2026/9/1", 150],
   ["夏季T恤", "2026-09-03", 98], ["夏季T恤", "2026-09-05", 105],
+  ["夏季T恤", "2026-09-06", 0.5], // decimal amounts are valid fixed-point quantities
   // 帆布鞋: occasional
   ["帆布鞋", "2026-08-21", 12], ["帆布鞋", "2026-08-25", 20], ["帆布鞋", "2026-08-28", 8],
   ["帆布鞋", "2026-09-02", 15], ["帆布鞋", "2026-09-05", 22],
+  ["帆布鞋", "2026-09-06", -3], // negative = a return day
   // 保温杯: sparse
   ["保温杯", "2026-08-23", 9], ["保温杯", "2026-08-27", 14], ["保温杯", "2026-08-31", 11],
-  ["保温杯", "2026-09-04", 16],
+  ["保温杯", "2026-09-04", 16], ["保温杯", "2026-09-06", 0], // 0 is accepted with a warning
   // 运动袜: with a thousands-formatted amount
   ["运动袜", "2026-08-22", 60], ["运动袜", "2026-08-26", 45], ["运动袜", "2026-08-29", "1,200"],
   ["运动袜", "2026-09-01", 70], ["运动袜", "2026-09-05", 55],
 ];
 const clean: unknown[][] = [["商品", "日期", "数量"]];
-for (const { p, d, a } of plan) {
+for (const [p, d, a] of plan) {
   clean.push(/^\d{4}-\d{2}-\d{2}$/.test(d) ? [p, dateCell(d), a] : [p, d, a]);
 }
 writeSample("../samples/历史销量导入-示例.xlsx", clean);
 
-// ---- sample with intentional errors (unknown product / bad date / decimal) ----
+// ---- sample for the auto-create flow: 渔夫帽 does not exist yet ----
+const newProductPlan: Row[] = [
+  ["渔夫帽", "2026-09-02", 20],
+  ["渔夫帽", "2026-09-04", 15],
+  ["夏季T恤", "2026-09-05", 100], // an existing product in the same sheet
+];
+const newProduct: unknown[][] = [["商品", "日期", "数量"]];
+for (const [p, d, a] of newProductPlan) newProduct.push([p, dateCell(d), a]);
+writeSample("../samples/历史销量导入-新商品.xlsx", newProduct);
+
+// ---- sample with intentional errors (unknown product / bad date / amount) ----
 writeSample("../samples/历史销量导入-含错误.xlsx", [
   ["商品", "日期", "数量"],
   ["夏季T恤", dateCell("2026-09-01"), 100],
   ["渔夫帽", dateCell("2026-09-02"), 50], // not created yet
   ["夏季T恤", "2026-02-30", 40], // impossible date
-  ["夏季T恤", dateCell("2026-09-04"), 12.5], // decimal amount
+  ["夏季T恤", dateCell("2026-09-04"), 1.2345], // more than 3 decimals
   ["", dateCell("2026-09-05"), 30], // missing product
 ]);
 
@@ -66,14 +75,23 @@ const a = await parseSalesSheetBytes(readFileSync("../samples/历史销量导入
 check("clean: all rows parsed", a.entries.length === plan.length, `${a.entries.length} vs ${plan.length}`);
 check("clean: no errors", a.errors.length === 0, JSON.stringify(a.errors));
 check("clean: 4 products", new Set(a.entries.map((e) => e.productType)).size === 4);
-check("clean: thousands parsed", a.entries.some((e) => e.productType === "运动袜" && e.amount === 1200));
+check("clean: thousands parsed", a.entries.some((e) => e.productType === "运动袜" && e.amount === 1_200_000));
 check("clean: slash date normalized", a.entries.some((e) => e.productType === "夏季T恤" && e.date === "2026-09-01"));
+check("clean: decimal scaled", a.entries.some((e) => e.amount === 500), JSON.stringify(a.entries.filter((e) => e.amount === 500)));
+check("clean: negative scaled", a.entries.some((e) => e.amount === -3000), JSON.stringify(a.entries.filter((e) => e.amount === -3000)));
+check("clean: zero row kept", a.entries.some((e) => e.amount === 0));
+check("clean: zero row warned", a.warnings.length === 1, JSON.stringify(a.warnings));
+
+const n = await parseSalesSheetBytes(readFileSync("../samples/历史销量导入-新商品.xlsx"));
+check("new-product sample: 3 rows parsed", n.entries.length === 3, JSON.stringify(n.entries));
+check("new-product sample: no errors", n.errors.length === 0, JSON.stringify(n.errors));
+check("new-product sample: contains the unknown product", n.entries.some((e) => e.productType === "渔夫帽"));
 
 const b = await parseSalesSheetBytes(readFileSync("../samples/历史销量导入-含错误.xlsx"));
 check("errors sample: 2 valid rows", b.entries.length === 2, JSON.stringify(b.entries));
 check("errors sample: rows flagged", b.errors.length === 3, JSON.stringify(b.errors));
 check("errors sample: bad date row listed", b.errors.some((e) => e.includes("第 4 行")), JSON.stringify(b.errors));
-check("errors sample: decimal amount listed", b.errors.some((e) => e.includes("第 5 行")), JSON.stringify(b.errors));
+check("errors sample: too-precise amount listed", b.errors.some((e) => e.includes("第 5 行")), JSON.stringify(b.errors));
 
 console.log(failed === 0 ? "\nALL SAMPLE CHECKS PASSED" : `\n${failed} CHECKS FAILED`);
 process.exit(failed === 0 ? 0 : 1);
