@@ -1,3 +1,4 @@
 samples/
 data.xlsx
 tmp/
+.venv/

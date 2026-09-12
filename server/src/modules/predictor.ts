@@ -90,7 +90,7 @@ function toForecast(record: unknown): TwoWeekForecast {
 
 /** Run the Python predictor, resolving with its raw stdout. */
 async function runPredictor(payload: unknown): Promise<string> {
-  const interpreter = process.env.PREDICTOR_PYTHON ?? "python";
+  const interpreter = process.env.PREDICTOR_PYTHON ?? "./.venv/bin/python3";
   const timeout = timeoutMs();
   return new Promise((resolve, reject) => {
     const child = spawn(interpreter, [scriptPath()], {
